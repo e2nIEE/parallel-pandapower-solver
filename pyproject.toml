@@ -47,6 +47,13 @@ dependencies = [
 requires-python = ">= 3.11"
 
 [project.optional-dependencies]
+docs = [
+    "numpydoc",
+    "sphinx",
+    "sphinx_rtd_theme",
+    "sphinx-pyproject",
+    "sphinxcontrib-imagesvg",
+]
 test = [
     "coverage",  # testing
     "pytest",  # testing
