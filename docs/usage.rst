@@ -1,16 +1,16 @@
 Usage
 =====
 
-To use graviton in a project:
+To use parallel-pandapower-solver in a project:
 
 .. code-block:: sh
 
-    import graviton
+    import p3s
 
 
 Solvers
 -------
 
-- **Newton-Raphson** (:code:`graviton.NewtonPowerflow`) — the general AC power-flow solver implemented in Python
+- **Newton-Raphson** (:code:`p3s.NewtonPowerflow`) — the general AC power-flow solver implemented in Python
   (transmission, PV/gen buses, trafos).
-- **CuDSS** (:code:`graviton.NewtonPowerflowCuda`) - also a general AC power-flow solver implemented in C++ and CUDA.
+- **CuDSS** (:code:`p3s.NewtonPowerflowCuda`) - also a general AC power-flow solver implemented in C++ and CUDA.

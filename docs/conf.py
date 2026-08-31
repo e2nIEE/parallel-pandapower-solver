@@ -39,7 +39,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = 'pandapower parallel solver'
+project = 'parallel pandapower solver'
 copyright = u'2026 by Fraunhofer IEE'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -48,7 +48,7 @@ copyright = u'2026 by Fraunhofer IEE'
 #
 # The full version, including alpha/beta/rc tags.
 from importlib.metadata import version as metaversion
-release = metaversion('graviton')
+release = metaversion('p3s')
 # The short X.Y version. for example take major/minor
 version = '.'.join(release.split('.')[:2])
 

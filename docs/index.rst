@@ -1,5 +1,5 @@
 ##########################
-pandapower parallel solver
+parallel pandapower solver
 ##########################
 
 

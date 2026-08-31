@@ -4,34 +4,34 @@ Installation
 Stable release
 --------------
 
-To install graviton, run this command in your terminal:
+To install the parallel pandapower solver , run this command in your terminal:
 
 .. code-block:: sh
 
-    uv add graviton
+    uv add p3s
 
 Or if you prefer to use ``pip``:
 
 .. code-block:: sh
 
-    pip install graviton
+    pip install p3s
 
 From source
 -----------
 
-The source files for graviton can be downloaded from the `Github repo <https://github.com/e2niee/graviton>`_.
+The source files can be downloaded from the `Github repo <https://github.com/e2niee/parallel-pandapower-solver>`_.
 
 You can either clone the public repository:
 
 .. code-block:: sh
 
-    git clone git://github.com/e2niee/graviton
+    git clone git://github.com/e2niee/parallel-pandapower-solver
 
-Or download the `tarball <https://github.com/e2niee/graviton/tarball/master>`_:
+Or download the `tarball <https://github.com/e2niee/parallel-pandapower-solver/tarball/master>`_:
 
 .. code-block:: sh
 
-    curl -OJL https://github.com/e2niee/graviton/tarball/master
+    curl -OJL https://github.com/e2niee/parallel-pandapower-solver/tarball/master
 
 Once you have a copy of the source, you can install it with:
 
