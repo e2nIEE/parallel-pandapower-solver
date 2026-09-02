@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+[build-system]
+requires = ["build", "wheel", "setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p3s"
+version = "1.0.0"
+description = "CPU / GPU based AC/DC Powerflow solver"
+readme = "README.md"
+authors = [
+  {name = "Mike Vogt", email = "mike.vogt@iee.fraunhofer.de"}
+]
+maintainers = [
+  {name = "Mike Vogt", email = "mike.vogt@iee.fraunhofer.de"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
+]
+license-files=["LICENSES/BSD-3-Clause.txt"]
+dependencies = [
+    "typer",
+    "pandapower>3.0.0",
+    "pybind11",
+    "scipy",
+    "numpy",
+    "intel-cmplr-lib-rt",
+    "numba"
+]
+requires-python = ">= 3.11"
+
+[project.optional-dependencies]
+test = [
+    "coverage",  # testing
+    "pytest",  # testing
+    "ruff",  # linting
+    "ty", # checking types
+    "ipdb", # debugging
+]
+# Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because it
+# needs a C++17 compiler and SuiteSparse/KLU at build time. Installs the separate
+# `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s
+# package so `from p3s import nr_klu` works.
+#
+#   pip install p3s[cpp]              # from an index (published p3s-cpp)
+#   pip install .[cpp]                # from a checkout (see note below)
+#
+# From a source checkout, p3s-cpp is not on an index, so build it explicitly:
+#   pip install ./p3s/cpp
+# (SuiteSparse must be available, e.g. `conda install -c conda-forge suitesparse`.)
+# (cuda-toolkit must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
+cpp = [
+    "p3s-cpp",
+]
+
+[project.urls]
+bugs = "https://github.com/e2niee/p3s/issues"
+changelog = "https://github.com/e2niee/p3s/blob/master/changelog.md"
+homepage = "https://github.com/e2niee/p3s"
+
+[project.scripts]
+p3s = "p3s.cli:app"
+
+[tool.ty]
+# All rules are enabled as "error" by default; no need to specify unless overriding.
+# Example override: relax a rule for the entire project (uncomment if needed).
+# rules.TY015 = "warn"  # For invalid-argument-type, warn instead of error.
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = [
+    "p3s*",
+]
+exclude = []
+
+[tool.setuptools.package-data]
+"p3s" = ["cuda/jacobian_kernels.cu", "cuda/nr_polar_kernels.cu"]

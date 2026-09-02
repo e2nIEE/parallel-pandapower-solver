@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Build definition for the compiled C++ power-flow extension, shipped as a SEPARATE
+# distribution `p3s-cpp` so the base `p3s` install stays pure-Python. Users
+# opt in with `pip install p3s[cpp]`, which pulls this in and compiles `nr_klu`
+# (KLU-backed Newton-Raphson) into the p3s package via CMake / scikit-build-core.
+#
+# Build it directly with:  pip install ./p3s/cpp
+# Requires a C++17 compiler and SuiteSparse/KLU (e.g. `conda install -c conda-forge
+# suitesparse`, or system libsuitesparse-dev).
+
+[build-system]
+# numpy is a BUILD requirement (not just runtime): the extension includes
+# pybind11/numpy.h, so the numpy headers must be present in the (isolated) build env.
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12", "numpy>=1.21"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "p3s-cpp"
+version = "1.0.0"
+description = "Compiled C++/KLU Newton-Raphson power-flow extension for p3s (nr_klu)"
+readme = "README.md"
+authors = [
+  {name = "Mike Vogt", email = "mike.vogt@iee.fraunhofer.de"}
+]
+license = "MIT"
+requires-python = ">= 3.10"
+# numpy is needed at runtime for the zero-copy py::array_t interface.
+dependencies = ["numpy"]
+# conda requrements: suitesparse
+
+[project.urls]
+homepage = "https://github.com/e2niee/parallel_pandapower_solver"
+
+[tool.scikit-build]
+# The module is installed into the p3s package by CMake's install() rule, so the
+# wheel root maps directly onto site-packages (p3s/nr_klu*.so|pyd).
+wheel.install-dir = "."
+cmake.version = ">=3.18"
+cmake.build-type = "Release"
+# Don't tune for the build host when producing a wheel (keep it portable); a local
+# `pip install ./p3s/cpp` can re-enable it with
+#   --config-settings=cmake.define.p3s_CPP_NATIVE=ON
+cmake.define.p3s_CPP_NATIVE = "OFF"
