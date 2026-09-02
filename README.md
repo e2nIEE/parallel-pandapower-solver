@@ -39,3 +39,9 @@ Look into docs/installation.md for more details.
 ## Credits
 
 This package was created with [Cookiecutter](https://github.com/audreyfeldroy/cookiecutter) and the [audreyfeldroy/cookiecutter-pypackage](https://github.com/audreyfeldroy/cookiecutter-pypackage) project template.
+
+
+---
+
+The software in this Github project only contains calls to NVIDIA software already installed by the user (e.g. CUDA);
+this software must be obtained and licensed separately and independently by the user.
