@@ -26,26 +26,27 @@ this never re-derives admittances from raw table parameters.
 This module does NO power-flow solve -- it only produces inputs and masks. It is pure
 NumPy/SciPy/pandas (no C++/CUDA), so it is unit-testable on its own.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
-import pandas as pd
 import scipy.sparse as sp
+from numpy.typing import NDArray
+
+from p3s.contingency.ground_truth import enumerate_contingencies, generator_z_pu
 
 # Pure-Python NewtonPowerflow: used ONLY for its base-Ybus + bus-classification +
 # element-model setup (make_ybus, _ybus_elements, busses, _lookup). Phase 1 is
 # backend-agnostic, so we deliberately avoid NewtonPowerflowCpp here (that module forces
 # importing the compiled nr_klu solver at load time, which the case generator never uses).
 from p3s.NewtonPowerflow import NewtonPowerflow
-from p3s.contingency.ground_truth import enumerate_contingencies, generator_z_pu
-
 
 # Bus reference kinds, recorded per island for diagnostics / solver pinning.
-REF_SLACK = "slack"        # island contains an original ext_grid (slack)
-REF_RESLACK_GEN = "gen"    # island re-slacked onto its lowest-Z generator
-REF_NONE = "none"          # island has no reference -> all its buses unserved
+REF_SLACK = "slack"  # island contains an original ext_grid (slack)
+REF_RESLACK_GEN = "gen"  # island re-slacked onto its lowest-Z generator
+REF_NONE = "none"  # island has no reference -> all its buses unserved
 
 
 @dataclass
@@ -59,47 +60,49 @@ class ContingencyCase:
     fields (``_yx_base`` + ``_stamp_delta``); the reference :meth:`build_case` stores an
     explicit ``_yx`` instead. Either way ``case.Yx`` returns the same (nnz,) complex vector.
     """
+
     group: str
-    served: np.ndarray         # (n_bus,) bool
-    ref_bus: np.ndarray        # (n_bus,) int, the reference bus of each bus's island, or -1
-    pinned_refs: list          # list of (bus, kind) added beyond the original slacks
+    served: NDArray  # (n_bus,) bool
+    ref_bus: NDArray  # (n_bus,) int, the reference bus of each bus's island, or -1
+    pinned_refs: list  # list of (bus, kind) added beyond the original slacks
 
     # Yx is lazy: either an explicit stored vector (_yx), or reconstructed from a shared
     # base + a sparse delta (_yx_base, _stamp_delta). Exactly one path is populated.
-    _yx: np.ndarray = None            # explicit (nnz,) complex128, or None -> use lazy path
-    _yx_base: np.ndarray = None       # shared base values (not copied per case)
-    _stamp_delta: object = None       # sparse (nnz,1) column: values to SUBTRACT from base
+    _yx: NDArray = None  # explicit (nnz,) complex128, or None -> use lazy path
+    _yx_base: NDArray = None  # shared base values (not copied per case)
+    _stamp_delta: object = None  # sparse (nnz,1) column: values to SUBTRACT from base
 
     @property
-    def Yx(self) -> np.ndarray:
+    def Yx(self) -> NDArray:
         """(nnz,) complex128: base pattern with this group's stamps removed."""
         if self._yx is not None:
             return self._yx
         delta = self._stamp_delta
         if delta is None or getattr(delta, "nnz", 1) == 0:
             return self._yx_base.copy()
-        return self._yx_base - np.asarray(delta.todense()).ravel()
+        return self._yx_base - np.asarray(delta.todense()).ravel()  # type: ignore[attr-defined]
 
 
 @dataclass
 class ContingencyBatch:
     """The shared pattern + all contingency cases for a net."""
-    Yp: np.ndarray             # (n_bus+1,) int32  CSR indptr (shared)
-    Yj: np.ndarray             # (nnz,)     int32  CSR indices (shared)
-    Yx_base: np.ndarray        # (nnz,)     complex128  intact-grid values
+
+    Yp: NDArray  # (n_bus+1,) int32  CSR indptr (shared)
+    Yj: NDArray  # (nnz,)     int32  CSR indices (shared)
+    Yx_base: NDArray  # (nnz,)     complex128  intact-grid values
     n_bus: int
-    groups: list               # contingency names, order matches `cases`
-    cases: list                # list[ContingencyCase]
-    pv: np.ndarray             # base pv bus indices (p3s 0-based)
-    pq: np.ndarray             # base pq bus indices
-    ref: np.ndarray            # base ext_grid (slack) bus indices
+    groups: list  # contingency names, order matches `cases`
+    cases: list  # list[ContingencyCase]
+    pv: NDArray  # base pv bus indices (p3s 0-based)
+    pq: NDArray  # base pq bus indices
+    ref: NDArray  # base ext_grid (slack) bus indices
 
     # Cached vectorized stamp matrix (nnz, L) set by the generator's build(); lets Yx_matrix
     # form all columns in one op instead of reconstructing/stacking per case. None -> stack.
     _stamp: object = None
 
     @property
-    def Yx_matrix(self) -> np.ndarray:
+    def Yx_matrix(self) -> NDArray:
         """(nnz, L) per-contingency values, column c = cases[c].Yx. Convenient for the
         batch solvers (one column per case, shared Yp/Yj).
 
@@ -107,8 +110,10 @@ class ContingencyBatch:
         (``Yx_base[:,None] - stamp``), not by stacking L per-case reconstructions."""
         L = len(self.cases)
         if self._stamp is not None:
-            M = np.repeat(self.Yx_base[:, None], L, axis=1)   # (nnz, L)
-            M -= np.asarray(self._stamp.todense())            # subtract all stamp deltas
+            M = np.repeat(self.Yx_base[:, None], L, axis=1)  # (nnz, L)
+
+            # subtract all stamp deltas
+            M -= np.asarray(self._stamp.todense())  # type: ignore[attr-defined]
             return M
         return np.stack([c.Yx for c in self.cases], axis=1)
 
@@ -126,12 +131,12 @@ def _branch_stamps(npf: NewtonPowerflow):
         model = elements.get(table)
         if model is None:
             continue
-        fb = np.asarray(model._from_bus, dtype=np.intp)
-        tb = np.asarray(model._to_bus, dtype=np.intp)
-        yff = np.asarray(model._Y_ff, dtype=complex)
-        yft = np.asarray(model._Y_ft, dtype=complex)
-        ytf = np.asarray(model._Y_tf, dtype=complex)
-        ytt = np.asarray(model._Y_tt, dtype=complex)
+        fb = np.asarray(model._from_bus, dtype=np.intp)  # type: ignore[union-attr]
+        tb = np.asarray(model._to_bus, dtype=np.intp)  # type: ignore[union-attr]
+        yff = np.asarray(model._Y_ff, dtype=complex)  # type: ignore[union-attr]
+        yft = np.asarray(model._Y_ft, dtype=complex)  # type: ignore[union-attr]
+        ytf = np.asarray(model._Y_tf, dtype=complex)  # type: ignore[union-attr]
+        ytt = np.asarray(model._Y_tt, dtype=complex)  # type: ignore[union-attr]
         for i in range(len(fb)):
             yield table, i, int(fb[i]), int(tb[i]), yff[i], yft[i], ytf[i], ytt[i]
 
@@ -145,7 +150,7 @@ def _csr_pos_lookup(Ybus_csr: sp.csr_matrix):
     """
     Yp, Yj = Ybus_csr.indptr, Ybus_csr.indices
     n = Ybus_csr.shape[0]
-    row_maps = [dict() for _ in range(n)]
+    row_maps: list[dict] = [{} for _ in range(n)]
     for r in range(n):
         for k in range(Yp[r], Yp[r + 1]):
             row_maps[r][Yj[k]] = k
@@ -156,7 +161,7 @@ def _csr_pos_lookup(Ybus_csr: sp.csr_matrix):
     return pos
 
 
-def _find_bridges(n: int, ea: np.ndarray, eb: np.ndarray) -> set:
+def _find_bridges(n: int, ea: NDArray, eb: NDArray) -> set:
     """Return the set of bridge edges (as (min,max) endpoint tuples) of the SIMPLE
     undirected graph on ``n`` vertices with edges ``(ea[i], eb[i])``.
 
@@ -169,7 +174,7 @@ def _find_bridges(n: int, ea: np.ndarray, eb: np.ndarray) -> set:
         return set()
     # adjacency list with edge ids (to skip the tree edge back to the parent correctly,
     # even though there are no multi-edges here)
-    adj = [[] for _ in range(n)]
+    adj: list = [[] for _ in range(n)]
     for eid in range(len(ea)):
         u, v = int(ea[eid]), int(eb[eid])
         adj[u].append((v, eid))
@@ -184,16 +189,18 @@ def _find_bridges(n: int, ea: np.ndarray, eb: np.ndarray) -> set:
             continue
         # stack frames: (node, parent_edge_id, iterator_index)
         stack = [(s, -1, 0)]
-        disc[s] = low[s] = timer; timer += 1
+        disc[s] = low[s] = timer
+        timer += 1
         while stack:
             u, pe, idx = stack[-1]
             if idx < len(adj[u]):
                 stack[-1] = (u, pe, idx + 1)
                 v, eid = adj[u][idx]
                 if eid == pe:
-                    continue                      # don't go back over the edge we came in on
+                    continue  # don't go back over the edge we came in on
                 if disc[v] == -1:
-                    disc[v] = low[v] = timer; timer += 1
+                    disc[v] = low[v] = timer
+                    timer += 1
                     stack.append((v, eid, 0))
                 else:
                     if disc[v] < low[u]:
@@ -276,21 +283,23 @@ class ContingencyCaseGenerator:
                 group = net[table]["outage_group"].iloc[i]
                 if group is not None and (isinstance(group, float) and np.isnan(group)):
                     group = None
-            pos = (self._pos(fb, fb), self._pos(fb, tb),
-                   self._pos(tb, fb), self._pos(tb, tb))
+            pos = (self._pos(fb, fb), self._pos(fb, tb), self._pos(tb, fb), self._pos(tb, tb))
             val = (yff, yft, ytf, ytt)
-            entries = list(zip(pos, val))
+            entries = list(zip(pos, val, strict=False))
             records.append({"group": group, "from": fb, "to": tb, "entries": entries})
-            fb_l.append(fb); tb_l.append(tb); grp_l.append(group)
-            pos_l.append(pos); val_l.append(val)
+            fb_l.append(fb)
+            tb_l.append(tb)
+            grp_l.append(group)
+            pos_l.append(pos)
+            val_l.append(val)
 
         self._br_from = np.asarray(fb_l, dtype=np.int64)
         self._br_to = np.asarray(tb_l, dtype=np.int64)
         self._br_group = np.asarray(grp_l, dtype=object)
-        self._br_pos = (np.asarray(pos_l, dtype=np.int64).reshape(-1, 4)
-                        if pos_l else np.zeros((0, 4), dtype=np.int64))
-        self._br_val = (np.asarray(val_l, dtype=np.complex128).reshape(-1, 4)
-                        if val_l else np.zeros((0, 4), dtype=np.complex128))
+        self._br_pos = np.asarray(pos_l, dtype=np.int64).reshape(-1, 4) if pos_l else np.zeros((0, 4), dtype=np.int64)
+        self._br_val = (
+            np.asarray(val_l, dtype=np.complex128).reshape(-1, 4) if val_l else np.zeros((0, 4), dtype=np.complex128)
+        )
         return records
 
     def _gen_z_by_bus(self) -> dict:
@@ -308,6 +317,8 @@ class ContingencyCaseGenerator:
             zi = z[gi]
             if not np.isfinite(zi):
                 continue
+
+            assert self._lookup is not None, "lookup not initialized"
             gbus = int(self._lookup[net.gen.bus[gi]])
             if gbus not in out or zi < out[gbus]:
                 out[gbus] = zi
@@ -319,7 +330,7 @@ class ContingencyCaseGenerator:
 
     # -- per-contingency assembly --------------------------------------------
 
-    def _case_Yx(self, outaged: list) -> np.ndarray:
+    def _case_Yx(self, outaged: list) -> NDArray:
         """Base Yx with the outaged branches' stamps subtracted (shared pattern)."""
         Yx = self.Yx_base.copy()
         for k in outaged:
@@ -327,7 +338,7 @@ class ContingencyCaseGenerator:
                 Yx[csr_pos] -= value
         return Yx
 
-    def _components_after_outage(self, outaged: list) -> tuple[np.ndarray, int]:
+    def _components_after_outage(self, outaged: list) -> tuple[NDArray, int]:
         """Connected components of the bus graph with the outaged branches removed.
 
         Vectorized: the base branch endpoint arrays (``_br_from``/``_br_to``) are constant,
@@ -337,21 +348,20 @@ class ContingencyCaseGenerator:
         n = self.n_bus
         f, t = self._br_from, self._br_to
         if len(f):
-            keep = np.ones(len(f), dtype=bool)
+            keep: NDArray = np.ones(len(f), dtype=bool)
             if outaged:
                 keep[np.asarray(outaged, dtype=np.int64)] = False
             fk, tk = f[keep], t[keep]
             # undirected: stamp both (f,t) and (t,f)
             rows = np.concatenate([fk, tk])
             cols = np.concatenate([tk, fk])
-            adj = sp.coo_matrix((np.ones(rows.shape[0], dtype=np.int8), (rows, cols)),
-                                shape=(n, n)).tocsr()
+            adj = sp.coo_matrix((np.ones(rows.shape[0], dtype=np.int8), (rows, cols)), shape=(n, n)).tocsr()
         else:
             adj = sp.csr_matrix((n, n))
         n_comp, labels = sp.csgraph.connected_components(adj, directed=False)
         return labels, n_comp
 
-    def _resolve_references(self, labels: np.ndarray, n_comp: int):
+    def _resolve_references(self, labels: NDArray, n_comp: int):
         """Per island, choose a reference: original slack > lowest-Z gen (if reslack) >
         none. Returns (served mask, ref_bus per bus, pinned_refs list).
 
@@ -362,17 +372,16 @@ class ContingencyCaseGenerator:
           * else -> unserved (ref -1).
         ``ref_bus`` is then a per-bus gather of its component's chosen reference.
         """
-        n = self.n_bus
         labels = np.asarray(labels)
 
         # comp_ref[c] = chosen reference bus for component c, or -1 if none.
-        comp_ref = np.full(n_comp, -1, dtype=np.int64)
+        comp_ref: NDArray = np.full(n_comp, -1, dtype=np.int64)
 
         # 1) original slacks: per component, the minimum slack bus index.
         if len(self.ref):
             slack_comp = labels[self.ref]
             # np.minimum.at gives per-component min over slack bus indices
-            tmp = np.full(n_comp, np.iinfo(np.int64).max, dtype=np.int64)
+            tmp: NDArray = np.full(n_comp, np.iinfo(np.int64).max, dtype=np.int64)
             np.minimum.at(tmp, slack_comp, self.ref.astype(np.int64))
             has_slack = tmp != np.iinfo(np.int64).max
             comp_ref[has_slack] = tmp[has_slack]
@@ -380,10 +389,8 @@ class ContingencyCaseGenerator:
         pinned_refs = []
         # 2) re-slack: components with no slack but >=1 eligible generator.
         if self.reslack_islands and self._gen_z:
-            gen_buses = np.fromiter(self._gen_z.keys(), dtype=np.int64,
-                                    count=len(self._gen_z))
-            gen_zs = np.fromiter(self._gen_z.values(), dtype=np.float64,
-                                 count=len(self._gen_z))
+            gen_buses = np.fromiter(self._gen_z.keys(), dtype=np.int64, count=len(self._gen_z))
+            gen_zs = np.fromiter(self._gen_z.values(), dtype=np.float64, count=len(self._gen_z))
             gcomp = labels[gen_buses]
             # per component: the minimum Z, then the (lowest-index) bus achieving it.
             best_z = np.full(n_comp, np.inf)
@@ -395,7 +402,7 @@ class ContingencyCaseGenerator:
                 # candidate gens whose Z equals their component's best
                 is_best = np.isclose(gen_zs, best_z[gcomp]) & need[gcomp]
                 cand_bus = np.where(is_best, gen_buses, np.iinfo(np.int64).max)
-                chosen = np.full(n_comp, np.iinfo(np.int64).max, dtype=np.int64)
+                chosen: NDArray = np.full(n_comp, np.iinfo(np.int64).max, dtype=np.int64)
                 np.minimum.at(chosen, gcomp, cand_bus)
                 picked = need & (chosen != np.iinfo(np.int64).max)
                 comp_ref[picked] = chosen[picked]
@@ -415,12 +422,11 @@ class ContingencyCaseGenerator:
         labels, n_comp = self._components_after_outage(outaged)
         served, ref_bus, pinned = self._resolve_references(labels, n_comp)
         # reference path: store an explicit Yx (the vectorized build() uses the lazy fields).
-        return ContingencyCase(group=group, served=served, ref_bus=ref_bus,
-                               pinned_refs=pinned, _yx=Yx)
+        return ContingencyCase(group=group, served=served, ref_bus=ref_bus, pinned_refs=pinned, _yx=Yx)
 
     # -- vectorized batch build ----------------------------------------------
 
-    def _group_branch_map(self, groups: list) -> list[np.ndarray]:
+    def _group_branch_map(self, groups: list) -> list[NDArray]:
         """For each group (in ``groups`` order), the array of branch-row indices in it.
         One vectorized pass over ``_br_group`` instead of an O(B) scan per group."""
         gpos = {g: i for i, g in enumerate(groups)}
@@ -448,10 +454,11 @@ class ContingencyCaseGenerator:
         if len(f) == 0:
             return set()
         # multiplicity per undirected endpoint pair
-        a = np.minimum(f, t); b = np.maximum(f, t)
+        a = np.minimum(f, t)
+        b = np.maximum(f, t)
         key = a.astype(np.int64) * n + b
         uniq, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
-        mult = counts[inv]                       # per-branch multiplicity
+        mult = counts[inv]  # per-branch multiplicity
         # Build the simple graph (unique edges) and find bridges via DFS low-link.
         bridges_pair = _find_bridges(n, a[mult == 1], b[mult == 1])
         # map bridge endpoint pairs back to branch rows (only mult==1 candidates)
@@ -485,25 +492,25 @@ class ContingencyCaseGenerator:
         for j, m in enumerate(members):
             if len(m) == 0:
                 continue
-            pos = self._br_pos[m].reshape(-1)      # (4*|m|,)
+            pos = self._br_pos[m].reshape(-1)  # (4*|m|,)
             val = self._br_val[m].reshape(-1)
             rows_l.append(pos)
             cols_l.append(np.full(pos.shape, j, dtype=np.int64))
             vals_l.append(val)
         if rows_l:
-            srow = np.concatenate(rows_l); scol = np.concatenate(cols_l)
+            srow = np.concatenate(rows_l)
+            scol = np.concatenate(cols_l)
             sval = np.concatenate(vals_l)
             stamp = sp.coo_matrix((sval, (srow, scol)), shape=(nnz, L)).tocsc()
         else:
             stamp = sp.csc_matrix((nnz, L), dtype=np.complex128)
-        self._stamp = stamp   # cached sparse stamps (used by Yx_matrix)
+        self._stamp = stamp  # cached sparse stamps (used by Yx_matrix)
 
         # --- connectivity: only bridge / multi-branch groups can island ---
         bridges = self._base_bridges()
-        all_served = np.ones(n, dtype=bool)
+        # all_served = np.ones(n, dtype=bool)
         # default reference for every bus in the fully-connected case
-        base_served, base_ref, _ = self._resolve_references(
-            np.zeros(n, dtype=np.int64), 1)
+        base_served, base_ref, _ = self._resolve_references(np.zeros(n, dtype=np.int64), 1)
 
         cases: list[ContingencyCase] = []
         stamp_csc = stamp  # column slicing (cheap CSC column extraction, per case)
@@ -518,13 +525,27 @@ class ContingencyCaseGenerator:
             # Lazy Yx: no dense per-case copy (that materialized ~9.6 GB for full pegase N-1).
             # Store the shared base + this case's sparse stamp column; case.Yx reconstructs on
             # demand, and Yx_matrix builds the whole (nnz,L) in one vectorized op below.
-            cases.append(ContingencyCase(
-                group=g, served=served, ref_bus=ref_bus, pinned_refs=pinned,
-                _yx_base=self.Yx_base, _stamp_delta=stamp_csc[:, j]))
+            cases.append(
+                ContingencyCase(
+                    group=g,
+                    served=served,
+                    ref_bus=ref_bus,
+                    pinned_refs=pinned,
+                    _yx_base=self.Yx_base,
+                    _stamp_delta=stamp_csc[:, j],
+                )
+            )
 
         return ContingencyBatch(
-            Yp=self.Yp, Yj=self.Yj, Yx_base=self.Yx_base, n_bus=self.n_bus,
-            groups=groups, cases=cases, pv=self.pv, pq=self.pq, ref=self.ref,
+            Yp=self.Yp,
+            Yj=self.Yj,
+            Yx_base=self.Yx_base,
+            n_bus=self.n_bus,
+            groups=groups,
+            cases=cases,
+            pv=self.pv,
+            pq=self.pq,
+            ref=self.ref,
             _stamp=stamp,
         )
 

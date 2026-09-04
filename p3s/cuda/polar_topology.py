@@ -23,13 +23,13 @@ Two differences from the C++ topology, both to serve cuSolverRf:
 
 Block ids match nr_klu: 0=dP/dVa, 1=dP/dVm, 2=dQ/dVa, 3=dQ/dVm.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
-import scipy.sparse as sp
-
+from numpy.typing import NDArray
 
 # derivative block ids (must match nr_polar_kernels.cu and nr_klu.cpp)
 BLK_dP_dVa = 0
@@ -45,29 +45,30 @@ class PolarTopology:
     Sizes: n = n_bus, nnzY = Ybus nnz, m = npvpq + npq (Jacobian dim),
     nnzJ = Jacobian nnz.
     """
+
     n: int
     m: int
     npvpq: int
     npq: int
 
     # Ybus CSR pattern + polar values (magnitude/angle), constant across iterations.
-    Yp: np.ndarray          # (n+1,) int32
-    Yj: np.ndarray          # (nnzY,) int32
-    Ym: np.ndarray          # (nnzY,) float64  |Y|
-    Ya: np.ndarray          # (nnzY,) float64  angle(Y)
-    Ydiag: np.ndarray       # (n,) int32  CSR data index of each row's diagonal
+    Yp: NDArray  # (n+1,) int32
+    Yj: NDArray  # (nnzY,) int32
+    Ym: NDArray  # (nnzY,) float64  |Y|
+    Ya: NDArray  # (nnzY,) float64  angle(Y)
+    Ydiag: NDArray  # (n,) int32  CSR data index of each row's diagonal
 
     # bus classification / position maps
-    pvpq: np.ndarray        # (npvpq,) int32  bus indices (pv then pq)
-    pq: np.ndarray          # (npq,) int32
-    pvpq_pos: np.ndarray    # (n,) int32  bus -> row in pvpq block, else -1
-    pq_pos: np.ndarray      # (n,) int32  bus -> row in pq block, else -1
+    pvpq: NDArray  # (npvpq,) int32  bus indices (pv then pq)
+    pq: NDArray  # (npq,) int32
+    pvpq_pos: NDArray  # (n,) int32  bus -> row in pvpq block, else -1
+    pq_pos: NDArray  # (n,) int32  bus -> row in pq block, else -1
 
     # Jacobian CSR pattern (already column-sorted per row for cuSolverRf).
-    Jp: np.ndarray          # (m+1,) int32
-    Jj: np.ndarray          # (nnzJ,) int32  column indices (sorted within each row)
-    src_k: np.ndarray       # (nnzJ,) int32  source Ybus CSR data index
-    src_block: np.ndarray   # (nnzJ,) int32  which derivative block (0..3)
+    Jp: NDArray  # (m+1,) int32
+    Jj: NDArray  # (nnzJ,) int32  column indices (sorted within each row)
+    src_k: NDArray  # (nnzJ,) int32  source Ybus CSR data index
+    src_block: NDArray  # (nnzJ,) int32  which derivative block (0..3)
 
     @property
     def nnzY(self) -> int:
@@ -78,9 +79,9 @@ class PolarTopology:
         return int(self.Jj.shape[0])
 
 
-def _compute_diag_ix(Yp: np.ndarray, Yj: np.ndarray, n: int) -> np.ndarray:
+def _compute_diag_ix(Yp: NDArray, Yj: NDArray, n: int) -> NDArray:
     """CSR data index of the diagonal entry of each row (-1 if absent)."""
-    Ydiag = np.full(n, -1, dtype=np.int32)
+    Ydiag: NDArray = np.full(n, -1, dtype=np.int32)
     for r in range(n):
         for k in range(Yp[r], Yp[r + 1]):
             if Yj[k] == r:
@@ -104,7 +105,6 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
     Yj = np.ascontiguousarray(Yj, dtype=np.int32)
     Yx = np.ascontiguousarray(Yx, dtype=np.complex128)
     n = int(Yp.shape[0] - 1)
-    nnzY = int(Yj.shape[0])
 
     Ym = np.ascontiguousarray(np.abs(Yx), dtype=np.float64)
     Ya = np.ascontiguousarray(np.angle(Yx), dtype=np.float64)
@@ -117,9 +117,9 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
     npq = int(pq.shape[0])
     m = npvpq + npq
 
-    pvpq_pos = np.full(n, -1, dtype=np.int32)
+    pvpq_pos: NDArray = np.full(n, -1, dtype=np.int32)
     pvpq_pos[pvpq] = np.arange(npvpq, dtype=np.int32)
-    pq_pos = np.full(n, -1, dtype=np.int32)
+    pq_pos: NDArray = np.full(n, -1, dtype=np.int32)
     pq_pos[pq] = np.arange(npq, dtype=np.int32)
 
     # -- build the Jacobian CSR pattern + source map, row by row --
@@ -130,7 +130,7 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
     #   * dVa column  if pvpq_pos[bus_col] != -1   (block dP/dVa or dQ/dVa)
     #   * dVm column  if pq_pos[bus_col]  != -1     (block dP/dVm or dQ/dVm)
     # We emit both, then sort the row's entries by column index (cuSolverRf needs it).
-    Jp = np.zeros(m + 1, dtype=np.int32)
+    Jp: NDArray = np.zeros(m + 1, dtype=np.int32)
     Jj_list: list[int] = []
     src_k_list: list[int] = []
     src_blk_list: list[int] = []
@@ -140,12 +140,12 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
         for k in range(Yp[bus_row], Yp[bus_row + 1]):
             bus_col = int(Yj[k])
             cpvpq = int(pvpq_pos[bus_col])
-            if cpvpq != -1:                         # dVa column
+            if cpvpq != -1:  # dVa column
                 cols.append(cpvpq)
                 sk.append(k)
                 sb.append(BLK_dP_dVa if is_p_row else BLK_dQ_dVa)
             cpq = int(pq_pos[bus_col])
-            if cpq != -1:                           # dVm column (offset by npvpq)
+            if cpq != -1:  # dVm column (offset by npvpq)
                 cols.append(npvpq + cpq)
                 sk.append(k)
                 sb.append(BLK_dP_dVm if is_p_row else BLK_dQ_dVm)
@@ -172,8 +172,21 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
     src_block = np.asarray(src_blk_list, dtype=np.int32)
 
     return PolarTopology(
-        n=n, m=m, npvpq=npvpq, npq=npq,
-        Yp=Yp, Yj=Yj, Ym=Ym, Ya=Ya, Ydiag=Ydiag,
-        pvpq=pvpq, pq=pq, pvpq_pos=pvpq_pos, pq_pos=pq_pos,
-        Jp=Jp, Jj=Jj, src_k=src_k, src_block=src_block,
+        n=n,
+        m=m,
+        npvpq=npvpq,
+        npq=npq,
+        Yp=Yp,
+        Yj=Yj,
+        Ym=Ym,
+        Ya=Ya,
+        Ydiag=Ydiag,
+        pvpq=pvpq,
+        pq=pq,
+        pvpq_pos=pvpq_pos,
+        pq_pos=pq_pos,
+        Jp=Jp,
+        Jj=Jj,
+        src_k=src_k,
+        src_block=src_block,
     )

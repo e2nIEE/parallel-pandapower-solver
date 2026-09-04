@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from typing import Any
-from numpy import ndarray, dtype, signedinteger, abs, nonzero, isclose, argwhere
+
+from numpy import abs, argwhere, dtype, isclose, ndarray, nonzero, signedinteger
 
 
-def differing_entries(a: ndarray,
-                      b: ndarray,
-                      rtol=1e-05,
-                      atol=1e-08):
+def differing_entries(a: ndarray, b: ndarray, rtol=1e-05, atol=1e-08):
     """
     Return a list of (row, col, a_val, b_val) where a and b differ
     beyond the given tolerance.
@@ -17,8 +15,8 @@ def differing_entries(a: ndarray,
     if a.shape != b.shape:
         raise ValueError("Shapes of a and b must match")
 
-    mask = ~isclose(a, b, rtol=rtol, atol=atol)    # False = close, True = differ
-    idxs = argwhere(mask)                          # 2-D indices where they differ
+    mask = ~isclose(a, b, rtol=rtol, atol=atol)  # False = close, True = differ
+    idxs = argwhere(mask)  # 2-D indices where they differ
     # return [(int(i), int(j), a[i, j], b[i, j]) for i, j in idxs]
     return idxs
 
@@ -41,8 +39,8 @@ def _compare_arrays(arr1, arr2, tolerance=0.1) -> tuple[bool, ndarray[Any, dtype
 def compare_arrays(table, arr1, arr2, atol=0.1) -> bool:
     is_equal, where = _compare_arrays(arr1, arr2, atol)
     if not is_equal:
-        name = ''
-        if 'name' in dir(arr1):
+        name = ""
+        if "name" in dir(arr1):
             name = arr1.name
         print(f"In {table}.{name}, the following elements are not equal: {where}")
         return False

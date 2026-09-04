@@ -11,21 +11,22 @@ the CPU C++/KLU batch path to solver tolerance.
 
 Skipped cleanly when pycuda / a CUDA GPU / the compiled nr_klu are unavailable.
 """
+
 import numpy as np
 import pytest
-
-pytest.importorskip("pycuda", reason="pycuda not installed")
-nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
-if not hasattr(nr_klu.Solver, "solve_batch_contingency"):
-    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)",
-                allow_module_level=True)
 
 from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import ground_truth
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
 
+pytest.importorskip("pycuda", reason="pycuda not installed")
+nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
+if not hasattr(nr_klu.Solver, "solve_batch_contingency"):
+    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)", allow_module_level=True)
+
 try:
     import pycuda.driver as _drv
+
     _drv.init()
     if _drv.Device.count() == 0:
         pytest.skip("no CUDA device", allow_module_level=True)
@@ -42,6 +43,7 @@ def _detect_backends():
     solve correctly, so the parametrized tests run on whatever the machine supports.
     """
     from p3s.contingency.solver_cuda import solve_contingencies_cuda as _solve
+
     net = FIXTURES["parallel_branch"]()
     ok = []
     for b in ("rf", "qr", "cudss"):
@@ -97,7 +99,7 @@ def test_gpu_contingency_reslacking_matches_ground_truth(backend):
 def test_gpu_matches_cpu(name, backend):
     """GPU and CPU C++ batch must agree on served mask, NaN positions, and served-bus V."""
     net = FIXTURES[name]()
-    reslack = (name == "generator_island")
+    reslack = name == "generator_island"
     rc = solve_contingencies_cpp(net, reslack_islands=reslack, n_threads=1)
     rg = solve_contingencies_cuda(net, reslack_islands=reslack, backend=backend)
     assert np.array_equal(rc.served, rg.served)

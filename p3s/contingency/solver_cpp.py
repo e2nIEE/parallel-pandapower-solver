@@ -25,44 +25,45 @@ Result table (mirrors the ground-truth oracle):
   * ``iterations``  : (L,) int
   * ``groups``      : list[str], column order
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
 try:
-    from p3s import nr_klu
+    from p3s import nr_klu  # type: ignore[attr-defined]
 except ImportError:
-    from p3s.cpp import nr_klu
-from p3s.timeseries import dc_initial_voltage
+    from p3s.cpp import nr_klu  # type: ignore[attr-defined]
 from p3s.contingency.case_generator import (
-    ContingencyCaseGenerator,
     ContingencyBatch,
+    ContingencyCaseGenerator,
 )
+from p3s.timeseries import dc_initial_voltage
 
 
 @dataclass
 class ContingencyResultTable:
     groups: list
-    V: np.ndarray            # (n_bus, L) complex, NaN at unserved
-    served: np.ndarray       # (n_bus, L) bool
-    converged: np.ndarray    # (L,) bool
-    iterations: np.ndarray   # (L,) int
+    V: NDArray  # (n_bus, L) complex, NaN at unserved
+    served: NDArray  # (n_bus, L) bool
+    converged: NDArray  # (L,) bool
+    iterations: NDArray  # (L,) int
 
     @property
-    def vm(self) -> np.ndarray:
+    def vm(self) -> NDArray:
         return np.abs(self.V)
 
     @property
-    def va(self) -> np.ndarray:
+    def va(self) -> NDArray:
         return np.degrees(np.angle(self.V))
 
 
-def solve_contingencies_cpp(net, reslack_islands: bool = False,
-                            tol: float = 1e-8, max_iter: int = 30,
-                            n_threads: int = 0,
-                            init: str = "dc") -> ContingencyResultTable:
+def solve_contingencies_cpp(
+    net, reslack_islands: bool = False, tol: float = 1e-8, max_iter: int = 30, n_threads: int = 0, init: str = "dc"
+) -> ContingencyResultTable:
     """Solve every N-1 contingency in ``net`` on the CPU C++/KLU batch path.
 
     init: {"dc", "flat"}, default "dc"
@@ -79,16 +80,23 @@ def solve_contingencies_cpp(net, reslack_islands: bool = False,
     L = len(batch.cases)
 
     # Shared symbolic factorization: one Solver for the whole batch.
-    solver = nr_klu.Solver(batch.Yp, batch.Yj,
-                           np.ascontiguousarray(batch.Yx_base, dtype=np.complex128),
-                           np.ascontiguousarray(batch.pv, dtype=np.int32),
-                           np.ascontiguousarray(batch.pq, dtype=np.int32))
+    solver = nr_klu.Solver(
+        batch.Yp,
+        batch.Yj,
+        np.ascontiguousarray(batch.Yx_base, dtype=np.complex128),
+        np.ascontiguousarray(batch.pv, dtype=np.int32),
+        np.ascontiguousarray(batch.pq, dtype=np.int32),
+    )
 
     if L == 0:
         empty2 = np.empty((n, 0))
         return ContingencyResultTable(
-            groups=[], V=empty2.astype(np.complex128), served=empty2.astype(bool),
-            converged=np.empty(0, bool), iterations=np.empty(0, int))
+            groups=[],
+            V=empty2.astype(np.complex128),
+            served=empty2.astype(bool),
+            converged=np.empty(0, bool),
+            iterations=np.empty(0, int),
+        )
 
     # Start voltage (one vector reused across all cases). "dc" seeds angles for
     # phase-shifting transformers; "flat" is the robust choice on very large nets where
@@ -102,16 +110,16 @@ def solve_contingencies_cpp(net, reslack_islands: bool = False,
         raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
 
     # per-case Ybus values (magnitude/angle) and pin/V0 matrices, columns = cases
-    Yx_mat = batch.Yx_matrix                       # (nnz, L) complex
+    Yx_mat = batch.Yx_matrix  # (nnz, L) complex
     Yx_mag = np.ascontiguousarray(np.abs(Yx_mat), dtype=np.float64)
     Yx_ang = np.ascontiguousarray(np.angle(Yx_mat), dtype=np.float64)
 
     Sbus = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)  # constant per case
 
-    V0 = np.empty((n, L), dtype=np.complex128)
-    pin = np.zeros((n, L), dtype=np.uint8)
+    V0: NDArray = np.empty((n, L), dtype=np.complex128)
+    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
     for c, case in enumerate(batch.cases):
-        v0 = v_start.copy()   # already holds ext_grid + pv/gen voltage setpoints
+        v0 = v_start.copy()  # already holds ext_grid + pv/gen voltage setpoints
         # pin re-slack reference generators at (gen vm setpoint) angle 0 -- the island's
         # angle reference is arbitrary, so we match the slack convention (va=0) rather
         # than leaving the DC-init angle, which would rotate the whole island by a
@@ -126,17 +134,23 @@ def solve_contingencies_cpp(net, reslack_islands: bool = False,
         V0[:, c] = v0
 
     res = solver.solve_batch_contingency(
-        Yx_mag, Yx_ang, Sbus,
+        Yx_mag,
+        Yx_ang,
+        Sbus,
         np.ascontiguousarray(V0, dtype=np.complex128),
         np.ascontiguousarray(pin, dtype=np.uint8),
-        max_iter=max_iter, tol=tol, n_threads=n_threads,
+        max_iter=max_iter,
+        tol=tol,
+        n_threads=n_threads,
     )
 
     V = res["V"].copy()  # (n, L)
     served = np.stack([c.served for c in batch.cases], axis=1)  # (n, L)
     V[~served] = np.nan
     return ContingencyResultTable(
-        groups=batch.groups, V=V, served=served,
+        groups=batch.groups,
+        V=V,
+        served=served,
         converged=np.asarray(res["converged"], dtype=bool),
         iterations=np.asarray(res["iterations"], dtype=int),
     )

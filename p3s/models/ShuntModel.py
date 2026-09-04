@@ -4,28 +4,27 @@
 
 import numpy as np
 import pandas as pd
+
 from p3s.models.TwoPort import TwoPort
 
+
 class ShuntModel(TwoPort):
-    def __init__(self,
-                 shunt_table: pd.DataFrame,
-                 sn_mva: float = 1.
-                 ):
+    def __init__(self, shunt_table: pd.DataFrame, sn_mva: float = 1.0):
 
         super().__init__()
-        self._from_bus = shunt_table['bus']
-        self._to_bus = shunt_table['bus']
+        self._from_bus = shunt_table["bus"]
+        self._to_bus = shunt_table["bus"]
 
-        q_mvar   = shunt_table['q_mvar']
-        p_mw     = shunt_table['p_mw']
-        vn_kv    = shunt_table['vn_kv']
-        step     = shunt_table['step']
-        max_step = shunt_table['max_step']
+        q_mvar = shunt_table["q_mvar"]
+        p_mw = shunt_table["p_mw"]
+        step = shunt_table["step"]
+        in_service = shunt_table["in_service"]
 
-        # TODO:
-        in_service = shunt_table['in_service']
-        step_dependency_table = shunt_table['step_dependency_table']
-        id_characteristic_table = shunt_table['id_characteristic_table']
+        # TODO: implement stepping behaviour for shunts
+        # vn_kv = shunt_table["vn_kv"]
+        # max_step = shunt_table["max_step"]
+        # step_dependency_table = shunt_table["step_dependency_table"]
+        # id_characteristic_table = shunt_table["id_characteristic_table"]
 
         s_shunt = (p_mw - q_mvar * 1j) * step
         y_shunt = s_shunt / sn_mva

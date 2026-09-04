@@ -17,6 +17,7 @@ Usage:
     python cpu_benchmark_results.py --input-files file1.json file2.json
     python cpu_benchmark_results.py --input-files file1.json file2.json --output-dir plots
 """
+
 import argparse
 import json
 import re
@@ -31,6 +32,7 @@ except ImportError:
 
 try:
     import matplotlib.pyplot as plt
+
     _HAS_MATPLOTLIB = True
 except ImportError:
     _HAS_MATPLOTLIB = False
@@ -54,7 +56,7 @@ def extract_thread_count(method_name: str) -> int | str | None:
 
 def load_result_file(filepath: Path) -> dict:
     """Load a single result JSON file."""
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         return json.load(f)
 
 
@@ -249,7 +251,7 @@ def print_summary(analysis: dict) -> None:
 
             print(f"  T={T}:")
             print(f"    {'Threads':<10} {'Time (ms)':<12} {'Speedup':<12} {'Efficiency':<12}")
-            print(f"    {'-'*10} {'-'*12} {'-'*12} {'-'*12}")
+            print(f"    {'-' * 10} {'-' * 12} {'-' * 12} {'-' * 12}")
 
             # Sort thread counts for display
             for tc in sorted(case_speedup.keys(), key=lambda tc: tc if isinstance(tc, int) else float("inf")):
@@ -311,11 +313,7 @@ def load_and_combine_results(input_files: list[Path]) -> dict:
 
             case_key = (case_name, T_values)
             if case_key not in combined_results:
-                combined_results[case_key] = {
-                    "case": case_name,
-                    "T_values": list(T_values),
-                    "methods": {}
-                }
+                combined_results[case_key] = {"case": case_name, "T_values": list(T_values), "methods": {}}
 
             existing_methods = combined_results[case_key]["methods"]
 
@@ -328,8 +326,7 @@ def load_and_combine_results(input_files: list[Path]) -> dict:
 
                     if len(existing_time_ms) == len(new_time_ms):
                         merged_time_ms = [
-                            mean_time([e, n])
-                            for e, n in zip(existing_time_ms, new_time_ms)
+                            mean_time([e, n]) for e, n in zip(existing_time_ms, new_time_ms, strict=False)
                         ]
                         existing_methods[tc]["time_ms"] = merged_time_ms
                         print(f"  Averaged {tc}thr across {filepath.name} and existing")
@@ -339,7 +336,7 @@ def load_and_combine_results(input_files: list[Path]) -> dict:
             continue
 
     result_dict = {}
-    for (case_name, T_values), result in combined_results.items():
+    for (case_name, _), result in combined_results.items():
         result_dict[case_name] = result
 
     print(f"Loaded {len(result_dict)} unique case(s)")
@@ -358,14 +355,16 @@ Examples:
     )
 
     parser.add_argument(
-        "--input-files", "-f",
+        "--input-files",
+        "-f",
         type=str,
         nargs="+",
         required=True,
         help="Input JSON files to analyze",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=str,
         default="./plots",
         help="Output directory for generated graphs",

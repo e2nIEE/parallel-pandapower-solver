@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """End-to-end test: NewtonPowerflowCpp.calculate vs pandapower runpp."""
+
 import time
+
 import numpy as np
 import pandapower as pp
 from pandapower.networks.power_system_test_cases import case9, case14, case118, case9241pegase
-from p3s.NewtonPowerflowCpp import NewtonPowerflow
+
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.NewtonPowerflowCpp import NewtonPowerflow
 
 CASES = {"case9": case9, "case14": case14, "case118": case118, "case9241": case9241pegase}
 
@@ -37,13 +40,15 @@ for name, fn in CASES.items():
         warm.append((time.perf_counter() - t0) * 1e3)
 
     vm = np.abs(V)
-    va = np.degree = np.angle(V, deg=True)
+    va = np.angle(V, deg=True)
     # align angle reference frame (p3s may differ by global shift if slack handling differs)
-    vm_err = np.max(np.abs(vm - vm_ref))
-    va_err = np.max(np.abs(((va - va_ref) + 180) % 360 - 180))
+    vm_err: float = np.max(np.abs(vm - vm_ref))
+    va_err: float = np.max(np.abs(((va - va_ref) + 180) % 360 - 180))
 
-    lines.append(f"[{name}] n={len(net.bus)} vm_err={vm_err:.2e} va_err={va_err:.2e}deg "
-                 f"cold={t_cold:.2f}ms warm_best={min(warm):.2f}ms")
+    lines.append(
+        f"[{name}] n={len(net.bus)} vm_err={vm_err:.2e} va_err={va_err:.2e}deg "
+        f"cold={t_cold:.2f}ms warm_best={min(warm):.2f}ms"
+    )
 
 txt = "\n".join(lines) + "\n"
 print(txt)
