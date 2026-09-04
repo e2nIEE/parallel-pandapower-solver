@@ -18,5 +18,5 @@ jobs:
         uses: ammaraskar/sphinx-action@54e52bfb642e9b60ea5b6bcb05fe3f74b40d290a #8.2.3
         with:
           pre-build-command: "python -m pip install uv && uv pip install .[docs] --system --link-mode-copy"
-          build-command: "sphinx-build -b html . _build -W"
+          build-command: "sphinx-build -b html ./docs _build -W"
           docs-folder: "docs/"
