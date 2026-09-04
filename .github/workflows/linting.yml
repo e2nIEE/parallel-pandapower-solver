@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install reuse ruff mypy
+      - run: pip install reuse ruff mypy numpy pandas-stub
       - run: reuse lint
       - run: ruff check
       - run: mypy
