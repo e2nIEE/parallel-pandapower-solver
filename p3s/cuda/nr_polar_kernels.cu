@@ -4,7 +4,7 @@
 
 // Fully-resident batched polar Newton-Raphson GPU kernels (Phase A).
 //
-// These mirror graviton/cpp/nr_klu.cpp (polar formulation) so GPU and CPU numerics are
+// These mirror p3s/cpp/nr_klu.cpp (polar formulation) so GPU and CPU numerics are
 // identical. All batch buffers are SYSTEM-MAJOR: system (column) c's data for a length-L
 // quantity lives contiguously at [c*L .. c*L+L). This matches cuSolverRf's batch layout
 // (system c's Jx at c*nnzJ, its rhs/x at c*n), so the assembly kernels write straight
