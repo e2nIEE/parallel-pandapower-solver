@@ -99,6 +99,7 @@ Before you submit a pull request, check that it meets these guidelines:
 1. The pull request should include tests.
 2. If the pull request adds functionality, the docs should be updated. Put your new functionality into a function with a docstring, and add the feature to the list in README.md.
 3. The pull request should work for Python >3.10. Tests run in GitHub Actions on every pull request to the main branch, make sure that the tests pass for all supported Python versions.
+4. Check that the license headers are correct by invoking `reuse lint` (for larger PR you can automate this process via `reuse annotate --copyright="Fraunhofer IEE" --license="BSD-3-Clause" --skip-unrecognised -r .`)
 
 ## Tips
 
