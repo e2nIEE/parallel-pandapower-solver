@@ -40,6 +40,7 @@ Notes
   contingencies that is ~1.1 hour, so use ``--limit`` for a quick estimate or
   ``--skip-pandapower`` to time only p3s.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,8 +51,8 @@ import numpy as np
 from pandapower.networks import case9241pegase
 
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.contingency.ground_truth import enumerate_contingencies, solve_contingency
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
-from p3s.contingency.ground_truth import solve_contingency, enumerate_contingencies
 
 
 def build_net(limit: int | None = None):
@@ -89,15 +90,14 @@ def _solve_in_chunks(net, threads, chunk):
     all_groups = enumerate_contingencies(net)
     n_conv = 0
     for start in range(0, len(all_groups), chunk):
-        sub = set(all_groups[start:start + chunk])
+        sub = set(all_groups[start : start + chunk])
         work = copy.deepcopy(net)
         # deactivate outage groups outside this chunk (they stay in service, untested)
         for tbl in ("line", "trafo"):
             if tbl in work and "outage_group" in work[tbl].columns:
                 col = work[tbl]["outage_group"]
                 work[tbl].loc[~col.isin(sub), "outage_group"] = None
-        res = solve_contingencies_cpp(work, reslack_islands=False,
-                                      n_threads=threads, init="flat")
+        res = solve_contingencies_cpp(work, reslack_islands=False, n_threads=threads, init="flat")
         n_conv += int(res.converged.sum())
         del res  # free this chunk's table before the next
     return n_conv, len(all_groups)
@@ -149,12 +149,12 @@ def time_gpu(net, max_chunk: int | None = None, backend: str = "cudss"):
             if tbl in warm and "outage_group" in warm[tbl].columns:
                 col = warm[tbl]["outage_group"]
                 warm[tbl].loc[~col.isin(keep), "outage_group"] = None
-        _ = solve_contingencies_cuda(warm, reslack_islands=False, init="flat",
-                                     max_chunk=max_chunk, backend=backend)
+        _ = solve_contingencies_cuda(warm, reslack_islands=False, init="flat", max_chunk=max_chunk, backend=backend)
 
     t0 = time.perf_counter()
-    res = solve_contingencies_cuda(net, reslack_islands=False, init="flat",
-                                   max_iter=10, max_chunk=max_chunk, backend=backend)
+    res = solve_contingencies_cuda(
+        net, reslack_islands=False, init="flat", max_iter=10, max_chunk=max_chunk, backend=backend
+    )
     dt = time.perf_counter() - t0
     return res, dt, int(res.converged.sum()), len(res.groups)
 
@@ -192,33 +192,51 @@ def validate(net, res, groups, n_sample: int):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--limit", type=int, default=None,
-                    help="only benchmark the first N branches (default: all lines+trafos)")
-    ap.add_argument("--threads", type=int, default=0,
-                    help="nr_klu OpenMP threads (0=all cores, 1=serial; default 0)")
-    ap.add_argument("--skip-pandapower", action="store_true",
-                    help="time p3s only (skip the slow pandapower loop)")
-    ap.add_argument("--validate", type=int, default=10,
-                    help="spot-check this many contingencies vs pandapower (default 10; "
-                         "ignored with --chunk, which keeps no result table)")
-    ap.add_argument("--chunk", type=int, default=None,
-                    help="CPU only: solve in memory-bounded chunks of this many "
-                         "contingencies (recommended for the full pegase sweep: the full "
-                         "result table is ~2.4 GB). Disables --validate.")
-    ap.add_argument("--backend", choices=("cpp", "gpu", "both"), default="cpp",
-                    help="which p3s solver to time: cpp=nr_klu (default), "
-                         "gpu=fully-resident polar cuSolverRf, both=run both and compare")
-    ap.add_argument("--gpu-max-chunk", type=int, default=None,
-                    help="GPU: cap the per-chunk batch size (default: memory-budget only). "
-                         "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
-                         "leave unset on large GPUs (A100) so the memory budget decides.")
-    ap.add_argument("--gpu-backend", choices=("rf", "qr", "cudss"), default="cudss",
-                    help="GPU linear-solve backend: cudss=NVIDIA cuDSS batched direct solver "
-                         "(DEFAULT; needs nvidia-cudss-cuXX); rf=cusolverRf batched (legacy, "
-                         "segfaults on CUDA 12.4); qr=cusolverSp per-system QR (robust but "
-                         "slow at scale). Run diagnose_gpu.py to see which work in your env.")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument(
+        "--limit", type=int, default=None, help="only benchmark the first N branches (default: all lines+trafos)"
+    )
+    ap.add_argument("--threads", type=int, default=0, help="nr_klu OpenMP threads (0=all cores, 1=serial; default 0)")
+    ap.add_argument("--skip-pandapower", action="store_true", help="time p3s only (skip the slow pandapower loop)")
+    ap.add_argument(
+        "--validate",
+        type=int,
+        default=10,
+        help="spot-check this many contingencies vs pandapower (default 10; "
+        "ignored with --chunk, which keeps no result table)",
+    )
+    ap.add_argument(
+        "--chunk",
+        type=int,
+        default=None,
+        help="CPU only: solve in memory-bounded chunks of this many "
+        "contingencies (recommended for the full pegase sweep: the full "
+        "result table is ~2.4 GB). Disables --validate.",
+    )
+    ap.add_argument(
+        "--backend",
+        choices=("cpp", "gpu", "both"),
+        default="cpp",
+        help="which p3s solver to time: cpp=nr_klu (default), "
+        "gpu=fully-resident polar cuSolverRf, both=run both and compare",
+    )
+    ap.add_argument(
+        "--gpu-max-chunk",
+        type=int,
+        default=None,
+        help="GPU: cap the per-chunk batch size (default: memory-budget only). "
+        "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
+        "leave unset on large GPUs (A100) so the memory budget decides.",
+    )
+    ap.add_argument(
+        "--gpu-backend",
+        choices=("rf", "qr", "cudss"),
+        default="cudss",
+        help="GPU linear-solve backend: cudss=NVIDIA cuDSS batched direct solver "
+        "(DEFAULT; needs nvidia-cudss-cuXX); rf=cusolverRf batched (legacy, "
+        "segfaults on CUDA 12.4); qr=cusolverSp per-system QR (robust but "
+        "slow at scale). Run diagnose_gpu.py to see which work in your env.",
+    )
     args = ap.parse_args()
 
     print("Building case9241pegase with per-branch outage groups ...")
@@ -227,8 +245,7 @@ def main():
     n_cont = len(groups)
     n_line = int((net.line["outage_group"].notna()).sum())
     n_trafo = int((net.trafo["outage_group"].notna()).sum())
-    print(f"  {len(net.bus)} buses | {n_cont} contingencies "
-          f"({n_line} lines + {n_trafo} transformers)")
+    print(f"  {len(net.bus)} buses | {n_cont} contingencies ({n_line} lines + {n_trafo} transformers)")
 
     do_cpp = args.backend in ("cpp", "both")
     do_gpu = args.backend in ("gpu", "both")
@@ -238,20 +255,21 @@ def main():
 
     if do_cpp:
         chunk_note = f", chunk={args.chunk}" if args.chunk else ""
-        print(f"\nRunning p3s CPU batch (nr_klu, threads={args.threads or 'all'}"
-              f"{chunk_note}) ...")
+        print(f"\nRunning p3s CPU batch (nr_klu, threads={args.threads or 'all'}{chunk_note}) ...")
         res_cpp, t_cpp, n_conv_c, _ = time_p3s(net, args.threads, chunk=args.chunk)
-        print(f"  nr_klu:    {t_cpp:8.3f} s total | {t_cpp / n_cont * 1e3:8.3f} "
-              f"ms/contingency | converged {n_conv_c}/{n_cont}")
+        print(
+            f"  nr_klu:    {t_cpp:8.3f} s total | {t_cpp / n_cont * 1e3:8.3f} "
+            f"ms/contingency | converged {n_conv_c}/{n_cont}"
+        )
 
     if do_gpu:
         mc_note = f", max_chunk={args.gpu_max_chunk}" if args.gpu_max_chunk else ""
-        print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}"
-              f"{mc_note}) ...")
-        res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk,
-                                               backend=args.gpu_backend)
-        print(f"  polar GPU: {t_gpu:8.3f} s total | {t_gpu / n_cont * 1e3:8.3f} "
-              f"ms/contingency | converged {n_conv_g}/{n_cont}")
+        print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
+        res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
+        print(
+            f"  polar GPU: {t_gpu:8.3f} s total | {t_gpu / n_cont * 1e3:8.3f} "
+            f"ms/contingency | converged {n_conv_g}/{n_cont}"
+        )
 
     # CPU vs GPU agreement (both have full result tables here)
     if do_cpp and do_gpu and res_cpp is not None and res_gpu is not None:
@@ -260,9 +278,11 @@ def main():
         both_conv = res_cpp.converged & res_gpu.converged
         m = (~np.isnan(res_cpp.V)) & (~np.isnan(res_gpu.V)) & both_conv[None, :]
         dV = float(np.abs(res_cpp.V[m] - res_gpu.V[m]).max()) if m.any() else 0.0
-        print(f"\n  CPU vs GPU: served-mask match={served_match} | converged match="
-              f"{conv_match} | max |dV| on {int(both_conv.sum())} mutually-converged "
-              f"cases = {dV:.2e}")
+        print(
+            f"\n  CPU vs GPU: served-mask match={served_match} | converged match="
+            f"{conv_match} | max |dV| on {int(both_conv.sum())} mutually-converged "
+            f"cases = {dV:.2e}"
+        )
 
     # spot-check the available result table(s) vs pandapower ground truth
     res_for_val = res_gpu if do_gpu else res_cpp
@@ -271,8 +291,10 @@ def main():
         v = validate(net, res_for_val, groups, args.validate)
         if v:
             vm_max, va_max, mism, n_chk = v
-            print(f"  over {n_chk} sampled: max vm err {vm_max:.2e} pu | "
-                  f"max va err {va_max:.2e} deg | served-mask mismatches {mism}")
+            print(
+                f"  over {n_chk} sampled: max vm err {vm_max:.2e} pu | "
+                f"max va err {va_max:.2e} deg | served-mask mismatches {mism}"
+            )
     elif args.validate and res_for_val is None:
         print("\n(--validate skipped: --chunk keeps no result table to compare)")
 
@@ -280,20 +302,21 @@ def main():
         print("\nSkipping pandapower loop (--skip-pandapower). Done.")
         return
 
-    print(f"\nRunning pandapower per-contingency loop ({n_cont} runpp solves; this is the "
-          f"slow part) ...")
+    print(f"\nRunning pandapower per-contingency loop ({n_cont} runpp solves; this is the slow part) ...")
     t_pp, n_conv_pp = time_pandapower(net, groups)
-    print(f"  pandapower: {t_pp:8.3f} s total | {t_pp / n_cont * 1e3:8.3f} ms/contingency"
-          f" | converged {n_conv_pp}/{n_cont}")
+    print(
+        f"  pandapower: {t_pp:8.3f} s total | {t_pp / n_cont * 1e3:8.3f} ms/contingency"
+        f" | converged {n_conv_pp}/{n_cont}"
+    )
 
     print("\n" + "=" * 60)
     print(f"  N-1 on case9241pegase: {n_cont} contingencies")
     if t_cpp is not None:
-        print(f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:8.2f} s"
-              f"  ({t_pp / t_cpp:5.1f}x vs pandapower)")
+        print(
+            f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:8.2f} s  ({t_pp / t_cpp:5.1f}x vs pandapower)"
+        )
     if t_gpu is not None:
-        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:8.2f} s"
-              f"  ({t_pp / t_gpu:5.1f}x vs pandapower)")
+        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:8.2f} s  ({t_pp / t_gpu:5.1f}x vs pandapower)")
     print(f"  pandapower loop:                            {t_pp:8.2f} s")
     print("=" * 60)
 

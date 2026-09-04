@@ -17,9 +17,9 @@ import p3s
 Most functionality lives in submodules, so import the solver you need explicitly:
 
 ```python
-from p3s.NewtonPowerflow import NewtonPowerflow            # pure-Python CPU solver
+from p3s.NewtonPowerflow import NewtonPowerflow  # pure-Python CPU solver
 from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp  # C++/KLU CPU solver
-from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA              # GPU solver
+from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA  # GPU solver
 ```
 
 ## Transformers
@@ -119,10 +119,10 @@ to an array of shape `(n_element, T)`:
 
 ```python
 timeseries = {
-    ("load", "p_mw"):   p_matrix,   # (n_load,  T)
-    ("load", "q_mvar"): q_matrix,   # (n_load,  T)
-    ("sgen", "p_mw"):   ...,        # (n_sgen,  T)
-    ("gen",  "p_mw"):   ...,        # (n_gen,   T)
+    ("load", "p_mw"): p_matrix,  # (n_load,  T)
+    ("load", "q_mvar"): q_matrix,  # (n_load,  T)
+    ("sgen", "p_mw"): ...,  # (n_sgen,  T)
+    ("gen", "p_mw"): ...,  # (n_gen,   T)
 }
 ```
 
@@ -140,7 +140,7 @@ system is solved in parallel.
 First tag the branches you want to consider with an `outage_group` column:
 
 ```python
-net.line["outage_group"] = net.line.index          # each line its own group
+net.line["outage_group"] = net.line.index  # each line its own group
 net.trafo["outage_group"] = net.trafo.index
 ```
 
@@ -200,11 +200,11 @@ and `qr` (cuda QR algorithm, more stable, but slower).
 Both solvers return a `ContingencyResultTable`:
 
 ```python
-res.groups       # list of contingency names, one per column
-res.V            # (n_bus, L) complex voltages; NaN where a bus is unserved
-res.vm           # |V| view of res.V
-res.va           # angle view of res.V
-res.served       # (n_bus, L) bool, exact served/unserved mask
-res.converged    # (L,) bool, per-contingency convergence
-res.iterations   # (L,) iterations per contingency
+res.groups  # list of contingency names, one per column
+res.V  # (n_bus, L) complex voltages; NaN where a bus is unserved
+res.vm  # |V| view of res.V
+res.va  # angle view of res.V
+res.served  # (n_bus, L) bool, exact served/unserved mask
+res.converged  # (L,) bool, per-contingency convergence
+res.iterations  # (L,) iterations per contingency
 ```

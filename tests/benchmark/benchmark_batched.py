@@ -17,14 +17,16 @@ Newton-family methods (scipy / C++ / GPU) run on case9241pegase (PV+slack).
 Run as a script:
     python tests/benchmark_batched.py --case case9241pegase --methods pp,p3s cpp --T 64 256 1024
 """
+
 import argparse
 import json
 import os
 import sys
 import time
+import warnings
 from datetime import datetime
 from functools import partial
-from typing import TypedDict, Literal, NotRequired
+from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 from pandapower import pandapowerNet
@@ -38,6 +40,7 @@ except ImportError:
     _PANDAPOWER_CASES = False
 
 from pandapower.run import runpp
+
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
 from p3s.NewtonPowerflow import NewtonPowerflow
 
@@ -62,12 +65,11 @@ if os.environ.get("P3S_BENCH_CUDA") == "1":
     except ImportError:
         _HAS_CUDA = False
 
-import warnings
-
-warnings.filterwarnings('ignore', message="Matrix is exactly singular")
+warnings.filterwarnings("ignore", message="Matrix is exactly singular")
 
 type methods_type = Literal["pp", "p3s", "cpp-1thr", "cpp-Nthr", "gpu"]
 ALL_METHODS: list[methods_type] = ["pp", "p3s", "cpp-1thr", "cpp-Nthr", "gpu"]  # removed "sam" for now
+
 
 class MethodResults(TypedDict):
     status: Literal["success", "partial", "fail", "not_available", "error_unknown"]
@@ -75,6 +77,7 @@ class MethodResults(TypedDict):
     results: NotRequired[list[list[list[complex | float | int]] | None]]
     max_vm_error: list[float | int | None]
     errors: list[Exception]
+
 
 class BenchmarkResults(TypedDict):
     case: str
@@ -115,8 +118,7 @@ def _scipy_loop(net, scale):
             net.load.q_mvar = base_q * scale[:, t]
             npf = NewtonPowerflow(net)
             npf.calculate(net)
-            out[:, t] = (net.res_bus.vm_pu.values
-                         * np.exp(1j * np.radians(net.res_bus.va_degree.values)))
+            out[:, t] = net.res_bus.vm_pu.values * np.exp(1j * np.radians(net.res_bus.va_degree.values))
     finally:
         # Restore the base load values. Downstream methods re-derive their time-series
         # from net.load via _make_timeseries, and build_sbus_matrix applies time-series
@@ -139,8 +141,7 @@ def _pp_loop(net, scale):
             net.load.p_mw = base_p * scale[:, t]
             net.load.q_mvar = base_q * scale[:, t]
             runpp(net)
-            out[:, t] = (net.res_bus.vm_pu.values
-                         * np.exp(1j * np.radians(net.res_bus.va_degree.values)))
+            out[:, t] = net.res_bus.vm_pu.values * np.exp(1j * np.radians(net.res_bus.va_degree.values))
     finally:
         # Restore the base load values -- see _scipy_loop for why this matters.
         net.load.p_mw = base_p
@@ -154,7 +155,7 @@ def _vm_err(ab: tuple[list[complex | float | int], list[complex | float | int]])
 
 def _compute_vm_errors(
     baseline: list[list[list[complex | float | int]] | None],
-    method_results: list[list[list[complex | float | int]] | None]
+    method_results: list[list[list[complex | float | int]] | None],
 ) -> list[float | None]:
     """Compute max VM error between baseline and method results using _vm_err pattern."""
     if not baseline or not method_results or len(baseline) != len(method_results):
@@ -163,12 +164,12 @@ def _compute_vm_errors(
     errors = []
     a: list[list[complex | float | int]]
     b: list[list[complex | float | int]]
-    for a, b in zip(baseline, method_results):
+    for a, b in zip(baseline, method_results, strict=False):
         if a is None or b is None:
             errors.append(None)
         else:
             try:
-                errors.append(max(map(_vm_err, zip(a, b))))
+                errors.append(max(map(_vm_err, zip(a, b, strict=False))))
             except IndexError as ie:
                 print(f"IndexError occurred during error computation: {ie}")
                 errors.append(None)
@@ -208,49 +209,54 @@ CASE_NAME_TO_FUNC = {
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Unified cross-method batched power-flow benchmark"
-    )
+    parser = argparse.ArgumentParser(description="Unified cross-method batched power-flow benchmark")
     parser.add_argument(
-        "--case", "-c",
+        "--case",
+        "-c",
         type=str,
         default="case9241pegase",
         help="Case name (e.g., case4gs, case9241pegase)",
     )
     parser.add_argument(
-        "--methods", "-m",
+        "--methods",
+        "-m",
         type=str,
         default="all",
         help="Comma-separated list of methods to run: pp, p3s, cpp, cpp-1thr, cpp-Nthr",
     )
     parser.add_argument(
-        "--T", "-t",
+        "--T",
+        "-t",
         type=int,
         nargs="+",
         default=None,
         help="T values for timeseries (e.g., 64 256 1024)",
     )
     parser.add_argument(
-        "--num-threads", "-n",
+        "--num-threads",
+        "-n",
         type=int,
         nargs="+",
         default=None,
         help="Number of threads to use for parallelization (only supported for method cpp)",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=str,
         default=None,
         help="Output directory for results JSON",
     )
     parser.add_argument(
-        "--job-id", "-j",
+        "--job-id",
+        "-j",
         type=str,
         default=None,
         help="Job ID for output file naming",
     )
     parser.add_argument(
-        "--drop-results", "-dr",
+        "--drop-results",
+        "-dr",
         action="store_true",
         help="Drop results from JSON",
     )
@@ -428,12 +434,12 @@ def benchmark_newton(
     calculateTrafoCharacteristic(net, inplace=True)
 
     benchmark_res: BenchmarkResults = BenchmarkResults(
-            case=net.name,
-            job_id="",
-            timestamp=datetime.now().isoformat(),
-            bus_count=len(net.bus),
-            T_values=timesteps,
-            methods={}
+        case=net.name,
+        job_id="",
+        timestamp=datetime.now().isoformat(),
+        bus_count=len(net.bus),
+        T_values=timesteps,
+        methods={},
     )
 
     method_functions = {
@@ -452,22 +458,18 @@ def benchmark_newton(
     return benchmark_res
 
 
-def benchmark_cpp_multicore(
-    net: pandapowerNet,
-    timesteps: list[int],
-    n_threads: list[int]
-) -> BenchmarkResults:
+def benchmark_cpp_multicore(net: pandapowerNet, timesteps: list[int], n_threads: list[int]) -> BenchmarkResults:
     """Run Newton-family benchmarks and return structured results."""
     net.trafo.shift_degree = 0.0
     calculateTrafoCharacteristic(net, inplace=True)
 
     benchmark_res: BenchmarkResults = BenchmarkResults(
-            case=net.name,
-            job_id="",
-            timestamp=datetime.now().isoformat(),
-            bus_count=len(net.bus),
-            T_values=timesteps,
-            methods={}
+        case=net.name,
+        job_id="",
+        timestamp=datetime.now().isoformat(),
+        bus_count=len(net.bus),
+        T_values=timesteps,
+        methods={},
     )
 
     method_functions = {f"cpp-{n}thr": partial(run_cpp_benchmark, n_threads=n) for n in n_threads}
@@ -481,7 +483,7 @@ def benchmark_cpp_multicore(
 def write_results(results: BenchmarkResults, output_dir) -> str:
     """Write results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
-    filename = f"{results["job_id"]}_{results["case"]}.json"
+    filename = f"{results['job_id']}_{results['case']}.json"
     filepath_ = os.path.join(output_dir, filename)
 
     with open(filepath_, "w") as f:
@@ -512,12 +514,12 @@ if __name__ == "__main__":
 
     if num_threads is not None:
         if len(methods_to_run) != 1 or methods_to_run[0] != "cpp":
-            print(f"n_threads argument not supported for methods other than cpp")
+            print("n_threads argument not supported for methods other than cpp")
             sys.exit(3)
 
         newton_results = benchmark_cpp_multicore(test_case, t_list, num_threads)
     elif set(methods_to_run) & {"pp", "p3s", "cpp", "cpp-1thr", "cpp-Nthr", "gpu"}:
-            newton_results = benchmark_newton(test_case, methods_to_run, t_list)
+        newton_results = benchmark_newton(test_case, methods_to_run, t_list)
     else:
         print("could not run benchmark")
         sys.exit(4)

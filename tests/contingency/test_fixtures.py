@@ -13,14 +13,15 @@ They assert two things:
 
 No p3s solver is exercised yet -- only pandapower is the oracle here.
 """
+
 import numpy as np
 import pytest
 
 from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import (
     enumerate_contingencies,
-    ground_truth,
     generator_z_pu,
+    ground_truth,
 )
 
 # Expected contingency groups per fixture (the enumeration contract).
@@ -36,11 +37,11 @@ EXPECTED_GROUPS = {
 # Expected served-bus count per (fixture, group) with re-slacking OFF.
 EXPECTED_SERVED_OFF = {
     ("radial_spur", "core"): 5,
-    ("radial_spur", "spur"): 3,        # b3, b4 islanded
+    ("radial_spur", "spur"): 3,  # b3, b4 islanded
     ("parallel_branch", "one_of_two"): 3,
     ("parallel_branch_both", "both"): 3,
     ("tapped_trafo", "trafo"): 3,
-    ("generator_island", "tie"): 2,    # cluster B (g0,g1) unserved
+    ("generator_island", "tie"): 2,  # cluster B (g0,g1) unserved
     ("multi_branch_group", "string"): 4,  # b4, b5 islanded
 }
 
@@ -48,6 +49,7 @@ EXPECTED_SERVED_OFF = {
 @pytest.mark.parametrize("name", list(FIXTURES))
 def test_fixture_builds_and_base_case_converges(name):
     import pandapower as pp
+
     net = FIXTURES[name]()
     # the intact net (no outage) must solve -- a sanity check on the fixture itself
     pp.runpp(net, init="flat")
@@ -70,8 +72,7 @@ def test_ground_truth_served_and_converged_reslack_off(name):
         assert res.converged, f"{name}/{group} should converge (served component)"
         n_served = int(res.served.sum())
         assert n_served == EXPECTED_SERVED_OFF[(name, group)], (
-            f"{name}/{group}: served {n_served}, "
-            f"expected {EXPECTED_SERVED_OFF[(name, group)]}"
+            f"{name}/{group}: served {n_served}, expected {EXPECTED_SERVED_OFF[(name, group)]}"
         )
         # served <=> vm is finite; unserved <=> NaN
         assert np.array_equal(res.served, np.isfinite(res.vm))
@@ -119,4 +120,5 @@ def test_ungrouped_branches_are_never_taken_out():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v"]))

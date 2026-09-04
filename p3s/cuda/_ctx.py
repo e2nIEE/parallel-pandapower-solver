@@ -15,9 +15,10 @@ handle``. Retaining the primary context (``pycuda.autoprimaryctx``) makes pycuda
 share one context, so kernels and cuDSS interoperate. Falls back to ``autoinit`` on old
 pycuda builds without ``autoprimaryctx`` (fine when cuDSS is not used).
 """
+
 try:
-    import pycuda.autoprimaryctx  # noqa: F401  (retains the device primary context)
+    import pycuda.autoprimaryctx  # noqa: F401 (retains the device primary context)
 except Exception:  # pragma: no cover - very old pycuda
     import pycuda.autoinit  # noqa: F401
 
-import pycuda.driver as cuda  # noqa: F401  re-exported for convenience
+import pycuda.driver as cuda  # noqa: F401 re-exported for convenience

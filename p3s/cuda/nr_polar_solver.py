@@ -17,18 +17,20 @@ Surface mirrors nr_klu.Solver: build once (symbolic analyze), then solve_batch(S
 This phase handles the time-series shape (Sbus varies per column, Ybus shared). Phase B
 adds per-column Ybus + pin for N-1 contingencies.
 """
+
 from __future__ import annotations
 
 import os
 
 import numpy as np
-from p3s.cuda import _ctx  # noqa: F401  (retains the CUDA primary context; cuDSS-safe)
+from numpy.typing import NDArray
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
 
-from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+from p3s.cuda import _ctx  # noqa: F401  (retains the CUDA primary context; cuDSS-safe)
 from p3s.cuda.cusolver_qr_batch import CusolverQRBatch
-from p3s.cuda.polar_topology import build_polar_topology, PolarTopology
+from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+from p3s.cuda.polar_topology import PolarTopology, build_polar_topology
 
 # Linear-solve backends, keyed by name. cuDSS is imported lazily (its lib may be absent).
 _BACKENDS = {"rf": CusolverRfBatch, "qr": CusolverQRBatch}
@@ -52,8 +54,7 @@ class PolarNewtonSolverCUDA:
 
     _mod = None  # compiled kernel module, shared across instances
 
-    def __init__(self, Yp, Yj, Yx, pv, pq, reorder: str = "symrcm",
-                 backend: str = "cudss"):
+    def __init__(self, Yp, Yj, Yx, pv, pq, reorder: str = "symrcm", backend: str = "cudss"):
         self.topo: PolarTopology = build_polar_topology(Yp, Yj, Yx, pv, pq)
         self.reorder = reorder
         # Linear-solve backend for the batched Newton step:
@@ -77,7 +78,7 @@ class PolarNewtonSolverCUDA:
         # GPU-dependent sweet spot, then gets WORSE (on the RTX A500, ~B=128; profiled in
         # Phase C). Past that, more columns per chunk cost more per column, so cap here.
         # None = memory-budget only (right for big GPUs where the sweet spot is large).
-        self.max_chunk = None
+        self.max_chunk: int | None = None
         # Correctness cap for the cuDSS uniform batch: cuDSS 0.8.0's UBATCH SOLVE
         # non-deterministically corrupts systems as the batch grows -- at B>=1024 it leaves
         # a random *few hundred* systems as NaN, and even at 512 a rare one slips through
@@ -123,9 +124,9 @@ class PolarNewtonSolverCUDA:
         self.d_Jp = _upload(t.Jp)
         self.d_Jj = _upload(t.Jj)
         # J-row index of each Jacobian nonzero (for the pin identity rows; Phase B)
-        row_of_nz = np.empty(t.nnzJ, dtype=np.int32)
+        row_of_nz: NDArray = np.empty(t.nnzJ, dtype=np.int32)
         for r in range(t.m):
-            row_of_nz[t.Jp[r]:t.Jp[r + 1]] = r
+            row_of_nz[t.Jp[r] : t.Jp[r + 1]] = r
         self.d_row_of_nz = _upload(row_of_nz)
 
     @staticmethod
@@ -136,6 +137,7 @@ class PolarNewtonSolverCUDA:
             return _BACKENDS[name]
         if name == "cudss":
             from p3s.cuda.cudss_batch import CudssBatch
+
             return CudssBatch
         raise ValueError(f"unknown backend {name!r}")
 
@@ -176,14 +178,29 @@ class PolarNewtonSolverCUDA:
         Pspec = np.ascontiguousarray(Sbus_mat.real.T, dtype=np.float64)  # (T, n)
         Qspec = np.ascontiguousarray(Sbus_mat.imag.T, dtype=np.float64)
         return self._run_newton_batch(
-            V0=V0, Pspec=Pspec, Qspec=Qspec,
-            d_Ym=self.d_Ym, d_Ya=self.d_Ya, Ystride=0,
-            pin=None, max_iter=max_iter, tol=tol)
+            V0=V0,
+            Pspec=Pspec,
+            Qspec=Qspec,
+            d_Ym=self.d_Ym,
+            d_Ya=self.d_Ya,
+            Ystride=0,
+            pin=None,
+            max_iter=max_iter,
+            tol=tol,
+        )
 
-    def solve_batch_contingency(self, Yx_mag, Yx_ang, Sbus, V0, pin,
-                                max_iter: int = 30, tol: float = 1e-8,
-                                numeric_zero: float = 1e-10,
-                                numeric_boost: float = 1e-8):
+    def solve_batch_contingency(
+        self,
+        Yx_mag,
+        Yx_ang,
+        Sbus,
+        V0,
+        pin,
+        max_iter: int = 30,
+        tol: float = 1e-8,
+        numeric_zero: float = 1e-10,
+        numeric_boost: float = 1e-8,
+    ):
         """Solve a batch of N-1 contingencies sharing this topology's pattern.
 
         Mirrors ``nr_klu.Solver.solve_batch_contingency``:
@@ -212,12 +229,12 @@ class PolarNewtonSolverCUDA:
 
         # per-case Ybus values -> system-major (L, nnzY). Sbus constant across cases -> a
         # SINGLE (n,) vector broadcast on device (Pshared=True), not L materialized copies.
-        d_Ym = _upload(np.ascontiguousarray(Yx_mag.T))   # (L, nnzY)
+        d_Ym = _upload(np.ascontiguousarray(Yx_mag.T))  # (L, nnzY)
         d_Ya = _upload(np.ascontiguousarray(Yx_ang.T))
         Sbus = np.asarray(Sbus, dtype=np.complex128).ravel()
         Pspec = np.ascontiguousarray(Sbus.real, dtype=np.float64)  # (n,)
         Qspec = np.ascontiguousarray(Sbus.imag, dtype=np.float64)
-        d_pin = _upload(np.ascontiguousarray(pin.T))     # (L, n)
+        d_pin = _upload(np.ascontiguousarray(pin.T))  # (L, n)
 
         # Numeric pivot boost keeps the batched RF factor non-singular on near-islanded
         # cases (KLU tolerates these per-system; the batch factor is more fragile).
@@ -231,15 +248,32 @@ class PolarNewtonSolverCUDA:
         # a flat start for the same reason (Ym_rep/Ya_rep=None => topo values, and we pass
         # a flat V for the representative eval below).
         return self._run_newton_batch(
-            V0=V0, Pspec=Pspec, Qspec=Qspec,
-            d_Ym=d_Ym, d_Ya=d_Ya, Ystride=nnzY,
-            pin=d_pin, max_iter=max_iter, tol=tol,
-            Ym_rep=None, Ya_rep=None, flat_rep=True, Pshared=True)
+            V0=V0,
+            Pspec=Pspec,
+            Qspec=Qspec,
+            d_Ym=d_Ym,
+            d_Ya=d_Ya,
+            Ystride=nnzY,
+            pin=d_pin,
+            max_iter=max_iter,
+            tol=tol,
+            Ym_rep=None,
+            Ya_rep=None,
+            flat_rep=True,
+            Pshared=True,
+        )
 
-    def solve_batch_contingency_cx(self, Yx, Sbus, V0, pin,
-                                   max_iter: int = 30, tol: float = 1e-8,
-                                   numeric_zero: float = 1e-10,
-                                   numeric_boost: float = 1e-8):
+    def solve_batch_contingency_cx(
+        self,
+        Yx,
+        Sbus,
+        V0,
+        pin,
+        max_iter: int = 30,
+        tol: float = 1e-8,
+        numeric_zero: float = 1e-10,
+        numeric_boost: float = 1e-8,
+    ):
         """Like solve_batch_contingency but takes COMPLEX per-case Ybus values ``Yx`` (nnz, L)
         and does the magnitude/angle conversion + transpose on the GPU (``yx_to_polar``),
         avoiding the ~4 s of single-threaded host np.abs/np.angle/.T on pegase. Upload the
@@ -265,9 +299,11 @@ class PolarNewtonSolverCUDA:
         d_Ya = cuda.mem_alloc(L * nnzY * _F64)
         bs = 256
         total = nnzY * L
-        self._k_yx_polar(d_re, d_im, d_Ym, d_Ya, np.int32(nnzY), np.int32(L),
-                         block=(bs, 1, 1), grid=((total + bs - 1) // bs, 1, 1))
-        d_re.free(); d_im.free()
+        self._k_yx_polar(  # type: ignore[attr-defined]
+            d_re, d_im, d_Ym, d_Ya, np.int32(nnzY), np.int32(L), block=(bs, 1, 1), grid=((total + bs - 1) // bs, 1, 1)
+        )
+        d_re.free()
+        d_im.free()
 
         Sbus = np.asarray(Sbus, dtype=np.complex128).ravel()
         Pspec = np.ascontiguousarray(Sbus.real, dtype=np.float64)
@@ -276,11 +312,22 @@ class PolarNewtonSolverCUDA:
         self._numeric_zero = numeric_zero
         self._numeric_boost = numeric_boost
         out = self._run_newton_batch(
-            V0=V0, Pspec=Pspec, Qspec=Qspec,
-            d_Ym=np.uintp(int(d_Ym)), d_Ya=np.uintp(int(d_Ya)), Ystride=nnzY,
-            pin=d_pin, max_iter=max_iter, tol=tol,
-            Ym_rep=None, Ya_rep=None, flat_rep=True, Pshared=True)
-        d_Ym.free(); d_Ya.free()
+            V0=V0,
+            Pspec=Pspec,
+            Qspec=Qspec,
+            d_Ym=np.uintp(int(d_Ym)),
+            d_Ya=np.uintp(int(d_Ya)),
+            Ystride=nnzY,
+            pin=d_pin,
+            max_iter=max_iter,
+            tol=tol,
+            Ym_rep=None,
+            Ya_rep=None,
+            flat_rep=True,
+            Pshared=True,
+        )
+        d_Ym.free()
+        d_Ya.free()
         return out
 
     # ------------------------------------------------------ chunk-size budgeting
@@ -315,9 +362,22 @@ class PolarNewtonSolverCUDA:
         return cs
 
     # -------------------------------------------------------- chunked Newton
-    def _run_newton_batch(self, V0, Pspec, Qspec, d_Ym, d_Ya, Ystride,
-                          pin, max_iter, tol, Ym_rep=None, Ya_rep=None,
-                          flat_rep=False, Pshared=False):
+    def _run_newton_batch(
+        self,
+        V0,
+        Pspec,
+        Qspec,
+        d_Ym,
+        d_Ya,
+        Ystride,
+        pin,
+        max_iter,
+        tol,
+        Ym_rep=None,
+        Ya_rep=None,
+        flat_rep=False,
+        Pshared=False,
+    ):
         """Device-resident batched Newton, CHUNKED to fit GPU memory. Shared by
         time-series and contingency.
 
@@ -363,9 +423,19 @@ class PolarNewtonSolverCUDA:
 
             r = self._run_chunk(
                 V0[:, start:stop],
-                Pc, Qc, Pshared,
-                d_Ym_c, d_Ya_c, Ystride, d_pin_c,
-                max_iter, tol, Ym_rep, Ya_rep, flat_rep)
+                Pc,
+                Qc,
+                Pshared,
+                d_Ym_c,
+                d_Ya_c,
+                Ystride,
+                d_pin_c,
+                max_iter,
+                tol,
+                Ym_rep,
+                Ya_rep,
+                flat_rep,
+            )
             V_out[:, start:stop] = r["V"]
             iters_out[start:stop] = r["iterations"]
             conv_out[start:stop] = r["converged"]
@@ -399,27 +469,35 @@ class PolarNewtonSolverCUDA:
                         Vbad[:, s:e],
                         Pbad if Pshared else Pbad[s:e],
                         Qbad if Pshared else Qbad[s:e],
-                        Pshared, d_Ym, d_Ya, 0, None,
-                        max_iter, tol, Ym_rep, Ya_rep, flat_rep)
+                        Pshared,
+                        d_Ym,
+                        d_Ya,
+                        0,
+                        None,
+                        max_iter,
+                        tol,
+                        Ym_rep,
+                        Ya_rep,
+                        flat_rep,
+                    )
                     newly_ok = r["converged"] & np.isfinite(r["V"]).all(axis=0)
                     # only accept columns that actually improved to a finite converged
                     # solution, so a re-corrupted retry cannot overwrite a good result.
                     take = np.nonzero(newly_ok)[0]
                     if take.size:
                         V_out[:, sub[take]] = r["V"][:, take]
-                        iters_out[sub[take]] = np.maximum(iters_out[sub[take]],
-                                                          r["iterations"][take])
+                        iters_out[sub[take]] = np.maximum(iters_out[sub[take]], r["iterations"][take])
                         conv_out[sub[take]] = True
                         any_progress = True
                 if not any_progress:
                     break  # nothing improved this pass -> genuinely non-convergent columns
 
-        return {"V": np.ascontiguousarray(V_out),
-                "iterations": iters_out, "converged": conv_out}
+        return {"V": np.ascontiguousarray(V_out), "iterations": iters_out, "converged": conv_out}
 
     # -------------------------------------------------------- one chunk (a batch)
-    def _run_chunk(self, V0, Pspec, Qspec, Pshared, d_Ym, d_Ya, Ystride,
-                   d_pin_ptr, max_iter, tol, Ym_rep, Ya_rep, flat_rep):
+    def _run_chunk(
+        self, V0, Pspec, Qspec, Pshared, d_Ym, d_Ya, Ystride, d_pin_ptr, max_iter, tol, Ym_rep, Ya_rep, flat_rep
+    ):
         """Solve ONE chunk (a single batch). Args mirror _run_newton_batch but for a column
         sub-range; d_Ym/d_Ya/d_pin_ptr are device pointers already offset to this chunk's
         first column. Pshared: Pspec/Qspec are a shared (n,) vector (Pstride=0), else (B,n)."""
@@ -427,7 +505,7 @@ class PolarNewtonSolverCUDA:
         n, m = t.n, t.m
         B = V0.shape[1]
 
-        Vm0 = np.ascontiguousarray(np.abs(V0).T, dtype=np.float64)      # (B, n)
+        Vm0 = np.ascontiguousarray(np.abs(V0).T, dtype=np.float64)  # (B, n)
         Va0 = np.ascontiguousarray(np.angle(V0).T, dtype=np.float64)
 
         # shared injections -> upload one n-vector and broadcast (Pstride=0); else (B,n).
@@ -454,16 +532,16 @@ class PolarNewtonSolverCUDA:
         # base grid: an outaged/pinned case's own start can give a numerically singular J
         # that breaks the host-LU pivot selection, even though the shared pattern is fine.
         if flat_rep:
-            Vm_r = np.ones(n); Va_r = np.zeros(n)
+            Vm_r = np.ones(n)
+            Va_r = np.zeros(n)
         else:
             Vm_r, Va_r = Vm0[0], Va0[0]
         # (Pspec/Qspec unused by _eval_Jx_host -- J is independent of S -- pass None.)
         Jx0 = self._eval_Jx_host(Vm_r, Va_r, None, None, Ym_r, Ya_r)
         Backend = self._resolve_backend(self.backend)
-        kw = dict(reorder=self.reorder, numeric_zero=self._numeric_zero,
-                  numeric_boost=self._numeric_boost)
+        kw = {"reorder": self.reorder, "numeric_zero": self._numeric_zero, "numeric_boost": self._numeric_boost}
         if self.backend == "cudss":
-            kw["pivot"] = self.pivot     # PIVOT_NONE by default -- cheap refactor on well-cond J
+            kw["pivot"] = self.pivot  # PIVOT_NONE by default -- cheap refactor on well-cond J
         rf = Backend(t.Jp, t.Jj, batch_size=B, **kw)
         rf.symbolic_setup(Jx0)
 
@@ -471,7 +549,10 @@ class PolarNewtonSolverCUDA:
         iters = np.zeros(B, dtype=np.int32)
 
         bs = 256
-        def grid(total): return ((total + bs - 1) // bs, 1, 1)
+
+        def grid(total):
+            return ((total + bs - 1) // bs, 1, 1)
+
         g_bn = grid(B * n)
         g_bJ = grid(B * t.nnzJ)
         g_bm = grid(B * m)
@@ -479,19 +560,46 @@ class PolarNewtonSolverCUDA:
         for it in range(max_iter):
             # 1. assemble F + derivative blocks (pre-update mismatch)
             self._k_eval(
-                self.d_Yp, self.d_Yj, self.d_Ydiag, d_Ym, d_Ya, np.int64(Ystride),
-                d_Vm, d_Va, d_Pspec, d_Qspec, np.int64(Pstride),
-                self.d_pvpq, self.d_pq, self.d_pvpq_pos, self.d_pq_pos,
+                self.d_Yp,
+                self.d_Yj,
+                self.d_Ydiag,
+                d_Ym,
+                d_Ya,
+                np.int64(Ystride),
+                d_Vm,
+                d_Va,
+                d_Pspec,
+                d_Qspec,
+                np.int64(Pstride),
+                self.d_pvpq,
+                self.d_pq,
+                self.d_pvpq_pos,
+                self.d_pq_pos,
                 d_pin,
-                d_dblocks, d_F,
-                np.int32(n), np.int32(t.nnzY), np.int32(t.npvpq),
-                np.int32(t.npq), np.int32(m), np.int32(B),
-                block=(bs, 1, 1), grid=g_bn)
+                d_dblocks,
+                d_F,
+                np.int32(n),
+                np.int32(t.nnzY),
+                np.int32(t.npvpq),
+                np.int32(t.npq),
+                np.int32(m),
+                np.int32(B),
+                block=(bs, 1, 1),
+                grid=g_bn,
+            )
 
             # 2. per-column residual + converged mask
             self._k_infnorm(
-                d_F, d_resid, d_conv, np.float64(tol), np.int32(m), np.int32(B),
-                block=(bs, 1, 1), grid=(B, 1, 1), shared=bs * _F64)
+                d_F,
+                d_resid,
+                d_conv,
+                np.float64(tol),
+                np.int32(m),
+                np.int32(B),
+                block=(bs, 1, 1),
+                grid=(B, 1, 1),
+                shared=bs * _F64,
+            )
 
             # Convergence check requires a device->host copy of the mask, which is a
             # BLOCKING sync that stalls the async kernel pipeline every iteration. Power-flow
@@ -510,27 +618,47 @@ class PolarNewtonSolverCUDA:
 
             # 3. gather J into rf's device Jx buffer (applies pin identity rows)
             self._k_gather(
-                d_dblocks, self.d_src_block, self.d_src_k,
-                self.d_Jp, self.d_Jj, self.d_pvpq, self.d_pq,
+                d_dblocks,
+                self.d_src_block,
+                self.d_src_k,
+                self.d_Jp,
+                self.d_Jj,
+                self.d_pvpq,
+                self.d_pq,
                 d_pin,
                 rf.d_A_batch,
-                np.int32(t.nnzY), np.int32(t.nnzJ), np.int32(t.npvpq),
-                np.int32(t.npq), np.int32(n), np.int32(B), self.d_row_of_nz,
-                block=(bs, 1, 1), grid=g_bJ)
+                np.int32(t.nnzY),
+                np.int32(t.nnzJ),
+                np.int32(t.npvpq),
+                np.int32(t.npq),
+                np.int32(n),
+                np.int32(B),
+                self.d_row_of_nz,
+                block=(bs, 1, 1),
+                grid=g_bJ,
+            )
 
             # rhs = -F into the backend's rhs buffer. For rf/qr this aliases d_X_batch
             # (in-place solve); for cuDSS it is a distinct buffer (out-of-place solve).
-            self._k_negate(d_F, rf.d_rhs_batch, np.int32(m), np.int32(B),
-                           block=(bs, 1, 1), grid=g_bm)
+            self._k_negate(d_F, rf.d_rhs_batch, np.int32(m), np.int32(B), block=(bs, 1, 1), grid=g_bm)
 
             rf.reset_refactor_device()
             rf.batch_solve_device()
 
             self._k_update(
-                rf.d_X_batch, self.d_pvpq, self.d_pq, d_conv,
-                d_Vm, d_Va,
-                np.int32(t.npvpq), np.int32(t.npq), np.int32(n), np.int32(B),
-                block=(bs, 1, 1), grid=g_bm)
+                rf.d_X_batch,
+                self.d_pvpq,
+                self.d_pq,
+                d_conv,
+                d_Vm,
+                d_Va,
+                np.int32(t.npvpq),
+                np.int32(t.npq),
+                np.int32(n),
+                np.int32(B),
+                block=(bs, 1, 1),
+                grid=g_bm,
+            )
 
         cuda.Context.synchronize()
 
@@ -538,7 +666,7 @@ class PolarNewtonSolverCUDA:
         Va_h = np.empty((B, n), dtype=np.float64)
         cuda.memcpy_dtoh(Vm_h, d_Vm)
         cuda.memcpy_dtoh(Va_h, d_Va)
-        V = (Vm_h * np.exp(1j * Va_h)).T                # (n, B)
+        V = (Vm_h * np.exp(1j * Va_h)).T  # (n, B)
         cuda.memcpy_dtoh(conv_host, d_conv)
 
         # free this chunk's device memory so the next chunk starts clean (chunking exists
@@ -555,7 +683,7 @@ class PolarNewtonSolverCUDA:
         }
 
     # -------------------------------------------------------------- helpers
-    def _eval_Jx_host(self, Vm, Va, Pspec, Qspec, Ym, Ya) -> np.ndarray:
+    def _eval_Jx_host(self, Vm, Va, Pspec, Qspec, Ym, Ya) -> NDArray:
         """Representative Jacobian values (sorted CSR order) for the symbolic setup.
 
         Pure numpy replica of the polar derivative + gather (matches the GPU kernel and
@@ -565,29 +693,36 @@ class PolarNewtonSolverCUDA:
         """
         t = self.topo
         n, nnzY = t.n, t.nnzY
-        dP_dVa = np.zeros(nnzY); dQ_dVa = np.zeros(nnzY)
-        dP_dVm = np.zeros(nnzY); dQ_dVm = np.zeros(nnzY)
+        dP_dVa = np.zeros(nnzY)
+        dQ_dVa = np.zeros(nnzY)
+        dP_dVm = np.zeros(nnzY)
+        dQ_dVm = np.zeros(nnzY)
         Yp, Yj, Yd = t.Yp, t.Yj, t.Ydiag
         for row in range(n):
             dix = Yd[row]
             for k in range(Yp[row], Yp[row + 1]):
                 col = Yj[k]
                 delta = Va[row] - Ya[k] - Va[col]
-                s = np.sin(delta); c = np.cos(delta)
+                s = np.sin(delta)
+                c = np.cos(delta)
                 VmrowYm = Vm[row] * Ym[k]
                 vij = VmrowYm * Vm[col]
                 if row != col:
-                    dpva = vij * s; dqva = -vij * c
-                    dP_dVa[k] = dpva; dQ_dVa[k] = dqva
-                    dP_dVm[k] = VmrowYm * c; dQ_dVm[k] = VmrowYm * s
-                    dP_dVa[dix] -= dpva; dQ_dVa[dix] -= dqva
+                    dpva = vij * s
+                    dqva = -vij * c
+                    dP_dVa[k] = dpva
+                    dQ_dVa[k] = dqva
+                    dP_dVm[k] = VmrowYm * c
+                    dQ_dVm[k] = VmrowYm * s
+                    dP_dVa[dix] -= dpva
+                    dQ_dVa[dix] -= dqva
                     dP_dVm[dix] += Ym[k] * Vm[col] * c
                     dQ_dVm[dix] += Ym[k] * Vm[col] * s
                 else:
                     dP_dVm[dix] += 2.0 * Vm[row] * Ym[k] * c
                     dQ_dVm[dix] += 2.0 * Vm[row] * Ym[k] * s
         blocks = [dP_dVa, dP_dVm, dQ_dVa, dQ_dVm]
-        Jx = np.empty(t.nnzJ, dtype=np.float64)
+        Jx: NDArray = np.empty(t.nnzJ, dtype=np.float64)
         for p in range(t.nnzJ):
             Jx[p] = blocks[t.src_block[p]][t.src_k[p]]
         return np.ascontiguousarray(Jx, dtype=np.float64)

@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from pandas import DataFrame
+
 from p3s.models.TwoPort import TwoPort
 
-def dc_pi_model(R, G, length, vn_kv, parallel, sn_mva=1.):
+
+def dc_pi_model(R, G, length, vn_kv, parallel, sn_mva=1.0):
 
     # 1) Calculate scaling, to scale everything in p.u.
-    R_N = (vn_kv ** 2) / sn_mva
+    R_N = (vn_kv**2) / sn_mva
 
     # 2) calculate series impedance
     Z_sr = 1 / (R / R_N) * length / parallel

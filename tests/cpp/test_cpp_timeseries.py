@@ -8,6 +8,7 @@ Each time step of the batched C++ solver must converge to the same bus voltages 
 per-step pandapower ``runpp`` reference. Uses a synthetic per-load scaling profile so
 the test is hermetic. Mirrors ``tests/cuda/test_cuda_timeseries.py``.
 """
+
 import copy
 
 import numpy as np

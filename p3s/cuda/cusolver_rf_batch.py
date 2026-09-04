@@ -35,9 +35,10 @@ factorization across multiple right-hand sides.
 import ctypes
 
 import numpy as np
-from p3s.cuda import _ctx  # noqa: F401  (CUDA primary context; shared with cuDSS/kernels)
+from numpy.typing import NDArray
 import pycuda.driver as cuda
 
+from p3s.cuda import _ctx  # noqa: F401  (CUDA primary context; shared with cuDSS/kernels)
 from p3s.cuda.CuSolverWrapper import _libcusolver, _libcusparse
 
 # Raw pycuda.driver allocations are used throughout (not pycuda.gpuarray): gpuarray
@@ -46,7 +47,7 @@ from p3s.cuda.CuSolverWrapper import _libcusolver, _libcusparse
 # mem_alloc / memcpy keeps it free of any nvcc dependency.
 
 _F64 = np.dtype(np.float64).itemsize  # 8
-_I32 = np.dtype(np.int32).itemsize    # 4
+_I32 = np.dtype(np.int32).itemsize  # 4
 
 # cusparse matrix-type / index-base enums
 _CUSPARSE_MATRIX_TYPE_GENERAL = 0
@@ -80,9 +81,15 @@ def _as_void_p(arr):
 class CusolverRfBatch:
     """Batched LU refactor+solve for a fixed CSR pattern via cuSolverRf."""
 
-    def __init__(self, Jp: np.ndarray, Jj: np.ndarray, batch_size: int,
-                 reorder: str = "symrcm", numeric_zero: float = 0.0,
-                 numeric_boost: float = 0.0):
+    def __init__(
+        self,
+        Jp: NDArray,
+        Jj: NDArray,
+        batch_size: int,
+        reorder: str = "symrcm",
+        numeric_zero: float = 0.0,
+        numeric_boost: float = 0.0,
+    ):
         self.n = int(len(Jp) - 1)
         self.nnz = int(len(Jj))
         self.batch_size = int(batch_size)
@@ -100,25 +107,25 @@ class CusolverRfBatch:
         self._Aj = np.ascontiguousarray(Jj, dtype=np.int32)
 
         # handles / descriptors created lazily in symbolic_setup
-        self._spH = None        # cusolverSp handle
-        self._rfH = None        # cusolverRf handle
-        self._descr = None      # cusparse matrix descriptor
+        self._spH: ctypes.c_void_p | None = None  # cusolverSp handle
+        self._rfH: ctypes.c_void_p | None = None  # cusolverRf handle
+        self._descr: ctypes.c_void_p | None = None  # cusparse matrix descriptor
 
         # device-side persistent buffers (allocated in symbolic_setup)
-        self._d_Ap = None       # int32 (n+1)
-        self._d_Aj = None       # int32 (nnz)
-        self._d_P = None        # int32 (n)
-        self._d_Q = None        # int32 (n)
+        self._d_Ap = None  # int32 (n+1)
+        self._d_Aj = None  # int32 (nnz)
+        self._d_P = None  # int32 (n)
+        self._d_Q = None  # int32 (n)
         self._d_A_batch = None  # float64 (B*nnz)
         self._d_A_array = None  # device array of B pointers into d_A_batch
         self._d_X_batch = None  # float64 (B*n)
         self._d_X_array = None  # device array of B pointers into d_X_batch
-        self._d_T = None        # float64 (2*B*n) cusolverRf scratch
+        self._d_T = None  # float64 (2*B*n) cusolverRf scratch
 
         self._setup_done = False
 
     # ------------------------------------------------------------------ setup
-    def symbolic_setup(self, Jx0: np.ndarray):
+    def symbolic_setup(self, Jx0: NDArray):
         """Reorder, host-LU factor a representative matrix, extract L/U, and assemble
         the cusolverRf batch handle. Allocates all persistent device buffers.
 
@@ -135,92 +142,149 @@ class CusolverRfBatch:
         self._spH = spH
 
         descr = ctypes.c_void_p()
-        _check(_libcusparse.cusparseCreateMatDescr(ctypes.byref(descr)),
-               "cusparseCreateMatDescr")
+        _check(_libcusparse.cusparseCreateMatDescr(ctypes.byref(descr)), "cusparseCreateMatDescr")
         _libcusparse.cusparseSetMatType(descr, _CUSPARSE_MATRIX_TYPE_GENERAL)
         _libcusparse.cusparseSetMatIndexBase(descr, _CUSPARSE_INDEX_BASE_ZERO)
         self._descr = descr
 
         # -- step 2: Qreorder = symrcm(A) / symamd(A) --
-        Qreorder = np.empty(n, dtype=np.int32)
+        Qreorder: NDArray = np.empty(n, dtype=np.int32)
         if self.reorder == "symrcm":
             fn = _libcusolver.cusolverSpXcsrsymrcmHost
         elif self.reorder == "symamd":
             fn = _libcusolver.cusolverSpXcsrsymamdHost
         else:
             raise ValueError(f"unknown reorder '{self.reorder}'")
-        _check(fn(spH, n, nnz, descr, _as_c_int_p(self._Ap), _as_c_int_p(self._Aj),
-                  _as_c_int_p(Qreorder)),
-               f"cusolverSpXcsr{self.reorder}Host")
+        _check(
+            fn(spH, n, nnz, descr, _as_c_int_p(self._Ap), _as_c_int_p(self._Aj), _as_c_int_p(Qreorder)),
+            f"cusolverSpXcsr{self.reorder}Host",
+        )
 
         # -- step 3: B = Q*A*Q^T (permute pattern, build map Bfrom A) --
         Bp = self._Ap.copy()
         Bj = self._Aj.copy()
         size_perm = ctypes.c_size_t(0)
-        _check(_libcusolver.cusolverSpXcsrperm_bufferSizeHost(
-            spH, n, n, nnz, descr, _as_c_int_p(Bp), _as_c_int_p(Bj),
-            _as_c_int_p(Qreorder), _as_c_int_p(Qreorder), ctypes.byref(size_perm)),
-            "cusolverSpXcsrperm_bufferSizeHost")
-        perm_buf = np.zeros(max(1, size_perm.value), dtype=np.uint8)
-        mapBfromA = np.arange(nnz, dtype=np.int32)
-        _check(_libcusolver.cusolverSpXcsrpermHost(
-            spH, n, n, nnz, descr, _as_c_int_p(Bp), _as_c_int_p(Bj),
-            _as_c_int_p(Qreorder), _as_c_int_p(Qreorder),
-            _as_c_int_p(mapBfromA), _as_void_p(perm_buf)),
-            "cusolverSpXcsrpermHost")
+        _check(
+            _libcusolver.cusolverSpXcsrperm_bufferSizeHost(
+                spH,
+                n,
+                n,
+                nnz,
+                descr,
+                _as_c_int_p(Bp),
+                _as_c_int_p(Bj),
+                _as_c_int_p(Qreorder),
+                _as_c_int_p(Qreorder),
+                ctypes.byref(size_perm),
+            ),
+            "cusolverSpXcsrperm_bufferSizeHost",
+        )
+        perm_buf: NDArray = np.zeros(max(1, size_perm.value), dtype=np.uint8)
+        mapBfromA: NDArray = np.arange(nnz, dtype=np.int32)
+        _check(
+            _libcusolver.cusolverSpXcsrpermHost(
+                spH,
+                n,
+                n,
+                nnz,
+                descr,
+                _as_c_int_p(Bp),
+                _as_c_int_p(Bj),
+                _as_c_int_p(Qreorder),
+                _as_c_int_p(Qreorder),
+                _as_c_int_p(mapBfromA),
+                _as_void_p(perm_buf),
+            ),
+            "cusolverSpXcsrpermHost",
+        )
         Bx = Ax0[mapBfromA].copy()
 
         # -- step 4: LU(B) with partial pivoting on host --
         info = ctypes.c_void_p()
-        _check(_libcusolver.cusolverSpCreateCsrluInfoHost(ctypes.byref(info)),
-               "cusolverSpCreateCsrluInfoHost")
-        _check(_libcusolver.cusolverSpXcsrluAnalysisHost(
-            spH, n, nnz, descr, _as_c_int_p(Bp), _as_c_int_p(Bj), info),
-            "cusolverSpXcsrluAnalysisHost")
+        _check(_libcusolver.cusolverSpCreateCsrluInfoHost(ctypes.byref(info)), "cusolverSpCreateCsrluInfoHost")
+        _check(
+            _libcusolver.cusolverSpXcsrluAnalysisHost(spH, n, nnz, descr, _as_c_int_p(Bp), _as_c_int_p(Bj), info),
+            "cusolverSpXcsrluAnalysisHost",
+        )
 
         size_internal = ctypes.c_size_t(0)
         size_lu = ctypes.c_size_t(0)
-        _check(_libcusolver.cusolverSpDcsrluBufferInfoHost(
-            spH, n, nnz, descr, _as_c_double_p(Bx), _as_c_int_p(Bp), _as_c_int_p(Bj),
-            info, ctypes.byref(size_internal), ctypes.byref(size_lu)),
-            "cusolverSpDcsrluBufferInfoHost")
-        lu_buf = np.zeros(max(1, size_lu.value), dtype=np.uint8)
+        _check(
+            _libcusolver.cusolverSpDcsrluBufferInfoHost(
+                spH,
+                n,
+                nnz,
+                descr,
+                _as_c_double_p(Bx),
+                _as_c_int_p(Bp),
+                _as_c_int_p(Bj),
+                info,
+                ctypes.byref(size_internal),
+                ctypes.byref(size_lu),
+            ),
+            "cusolverSpDcsrluBufferInfoHost",
+        )
+        lu_buf: NDArray = np.zeros(max(1, size_lu.value), dtype=np.uint8)
 
-        _check(_libcusolver.cusolverSpDcsrluFactorHost(
-            spH, n, nnz, descr, _as_c_double_p(Bx), _as_c_int_p(Bp), _as_c_int_p(Bj),
-            info, ctypes.c_double(1.0), _as_void_p(lu_buf)),
-            "cusolverSpDcsrluFactorHost")
+        _check(
+            _libcusolver.cusolverSpDcsrluFactorHost(
+                spH,
+                n,
+                nnz,
+                descr,
+                _as_c_double_p(Bx),
+                _as_c_int_p(Bp),
+                _as_c_int_p(Bj),
+                info,
+                ctypes.c_double(1.0),
+                _as_void_p(lu_buf),
+            ),
+            "cusolverSpDcsrluFactorHost",
+        )
 
         singularity = ctypes.c_int(-1)
-        _check(_libcusolver.cusolverSpDcsrluZeroPivotHost(
-            spH, info, ctypes.c_double(1e-14), ctypes.byref(singularity)),
-            "cusolverSpDcsrluZeroPivotHost")
+        _check(
+            _libcusolver.cusolverSpDcsrluZeroPivotHost(spH, info, ctypes.c_double(1e-14), ctypes.byref(singularity)),
+            "cusolverSpDcsrluZeroPivotHost",
+        )
         if singularity.value >= 0:
-            raise RuntimeError(
-                f"symbolic matrix is singular at pivot {singularity.value}")
+            raise RuntimeError(f"symbolic matrix is singular at pivot {singularity.value}")
 
         # -- step 5: extract P, Q, L, U --
         nnzL = ctypes.c_int(0)
         nnzU = ctypes.c_int(0)
-        _check(_libcusolver.cusolverSpXcsrluNnzHost(
-            spH, ctypes.byref(nnzL), ctypes.byref(nnzU), info),
-            "cusolverSpXcsrluNnzHost")
+        _check(
+            _libcusolver.cusolverSpXcsrluNnzHost(spH, ctypes.byref(nnzL), ctypes.byref(nnzU), info),
+            "cusolverSpXcsrluNnzHost",
+        )
         nnzL_v, nnzU_v = nnzL.value, nnzU.value
 
-        Plu = np.empty(n, dtype=np.int32)
-        Qlu = np.empty(n, dtype=np.int32)
-        Lp = np.empty(n + 1, dtype=np.int32)
-        Lj = np.empty(nnzL_v, dtype=np.int32)
-        Lx = np.empty(nnzL_v, dtype=np.float64)
-        Up = np.empty(n + 1, dtype=np.int32)
-        Uj = np.empty(nnzU_v, dtype=np.int32)
-        Ux = np.empty(nnzU_v, dtype=np.float64)
-        _check(_libcusolver.cusolverSpDcsrluExtractHost(
-            spH, _as_c_int_p(Plu), _as_c_int_p(Qlu),
-            descr, _as_c_double_p(Lx), _as_c_int_p(Lp), _as_c_int_p(Lj),
-            descr, _as_c_double_p(Ux), _as_c_int_p(Up), _as_c_int_p(Uj),
-            info, _as_void_p(lu_buf)),
-            "cusolverSpDcsrluExtractHost")
+        Plu: NDArray = np.empty(n, dtype=np.int32)
+        Qlu: NDArray = np.empty(n, dtype=np.int32)
+        Lp: NDArray = np.empty(n + 1, dtype=np.int32)
+        Lj: NDArray = np.empty(nnzL_v, dtype=np.int32)
+        Lx: NDArray = np.empty(nnzL_v, dtype=np.float64)
+        Up: NDArray = np.empty(n + 1, dtype=np.int32)
+        Uj: NDArray = np.empty(nnzU_v, dtype=np.int32)
+        Ux: NDArray = np.empty(nnzU_v, dtype=np.float64)
+        _check(
+            _libcusolver.cusolverSpDcsrluExtractHost(
+                spH,
+                _as_c_int_p(Plu),
+                _as_c_int_p(Qlu),
+                descr,
+                _as_c_double_p(Lx),
+                _as_c_int_p(Lp),
+                _as_c_int_p(Lj),
+                descr,
+                _as_c_double_p(Ux),
+                _as_c_int_p(Up),
+                _as_c_int_p(Uj),
+                info,
+                _as_void_p(lu_buf),
+            ),
+            "cusolverSpDcsrluExtractHost",
+        )
 
         # -- step 6: P = Qreorder[Plu], Q = Qreorder[Qlu] --
         P = Qreorder[Plu].astype(np.int32)
@@ -230,37 +294,57 @@ class CusolverRfBatch:
         rfH = ctypes.c_void_p()
         _check(_libcusolver.cusolverRfCreate(ctypes.byref(rfH)), "cusolverRfCreate")
         self._rfH = rfH
-        _check(_libcusolver.cusolverRfSetNumericProperties(
-            rfH, ctypes.c_double(self.numeric_zero),
-            ctypes.c_double(self.numeric_boost)),
-            "cusolverRfSetNumericProperties")
-        _check(_libcusolver.cusolverRfSetAlgs(
-            rfH, _CUSOLVERRF_FACTORIZATION_ALG0, _CUSOLVERRF_TRIANGULAR_SOLVE_ALG1),
-            "cusolverRfSetAlgs")
-        _check(_libcusolver.cusolverRfSetMatrixFormat(
-            rfH, _CUSOLVERRF_MATRIX_FORMAT_CSR, _CUSOLVERRF_UNIT_DIAGONAL_ASSUMED_L),
-            "cusolverRfSetMatrixFormat")
-        _check(_libcusolver.cusolverRfSetResetValuesFastMode(
-            rfH, _CUSOLVERRF_RESET_VALUES_FAST_MODE_ON),
-            "cusolverRfSetResetValuesFastMode")
+        _check(
+            _libcusolver.cusolverRfSetNumericProperties(
+                rfH, ctypes.c_double(self.numeric_zero), ctypes.c_double(self.numeric_boost)
+            ),
+            "cusolverRfSetNumericProperties",
+        )
+        _check(
+            _libcusolver.cusolverRfSetAlgs(rfH, _CUSOLVERRF_FACTORIZATION_ALG0, _CUSOLVERRF_TRIANGULAR_SOLVE_ALG1),
+            "cusolverRfSetAlgs",
+        )
+        _check(
+            _libcusolver.cusolverRfSetMatrixFormat(
+                rfH, _CUSOLVERRF_MATRIX_FORMAT_CSR, _CUSOLVERRF_UNIT_DIAGONAL_ASSUMED_L
+            ),
+            "cusolverRfSetMatrixFormat",
+        )
+        _check(
+            _libcusolver.cusolverRfSetResetValuesFastMode(rfH, _CUSOLVERRF_RESET_VALUES_FAST_MODE_ON),
+            "cusolverRfSetResetValuesFastMode",
+        )
 
         # -- step 9: cusolverRfBatchSetupHost (host arrays for A, L, U, P, Q) --
         B = self.batch_size
         # host A value array: B pointers into one contiguous host buffer
-        h_A_batch = np.tile(Ax0, B).astype(np.float64)        # (B*nnz,)
+        h_A_batch = np.tile(Ax0, B).astype(np.float64)  # (B*nnz,)
         h_A_ptrs = (ctypes.c_void_p * B)()
         base = h_A_batch.ctypes.data
         for i in range(B):
-            h_A_ptrs[i] = base + i * nnz * 8                  # 8 bytes / float64
-        _check(_libcusolver.cusolverRfBatchSetupHost(
-            B, n, nnz,
-            _as_c_int_p(self._Ap), _as_c_int_p(self._Aj),
-            ctypes.cast(h_A_ptrs, ctypes.c_void_p),
-            nnzL_v, _as_c_int_p(Lp), _as_c_int_p(Lj), _as_c_double_p(Lx),
-            nnzU_v, _as_c_int_p(Up), _as_c_int_p(Uj), _as_c_double_p(Ux),
-            _as_c_int_p(P), _as_c_int_p(Q),
-            rfH),
-            "cusolverRfBatchSetupHost")
+            h_A_ptrs[i] = base + i * nnz * 8  # 8 bytes / float64
+        _check(
+            _libcusolver.cusolverRfBatchSetupHost(
+                B,
+                n,
+                nnz,
+                _as_c_int_p(self._Ap),
+                _as_c_int_p(self._Aj),
+                ctypes.cast(h_A_ptrs, ctypes.c_void_p),
+                nnzL_v,
+                _as_c_int_p(Lp),
+                _as_c_int_p(Lj),
+                _as_c_double_p(Lx),
+                nnzU_v,
+                _as_c_int_p(Up),
+                _as_c_int_p(Uj),
+                _as_c_double_p(Ux),
+                _as_c_int_p(P),
+                _as_c_int_p(Q),
+                rfH,
+            ),
+            "cusolverRfBatchSetupHost",
+        )
 
         # -- step 10: analyze to extract parallelism --
         _check(_libcusolver.cusolverRfBatchAnalyze(rfH), "cusolverRfBatchAnalyze")
@@ -283,7 +367,7 @@ class CusolverRfBatch:
         return self
 
     @staticmethod
-    def _to_device(arr: np.ndarray):
+    def _to_device(arr: NDArray):
         """Allocate device memory and copy a contiguous host array onto it."""
         arr = np.ascontiguousarray(arr)
         d = cuda.mem_alloc(arr.nbytes)
@@ -294,14 +378,13 @@ class CusolverRfBatch:
     def _make_ptr_array(d_batch, stride: int, B: int):
         """Build a device array of B pointers: ptr[i] = base + i*stride*8 bytes."""
         base = int(d_batch)
-        host_ptrs = np.array([base + i * stride * _F64 for i in range(B)],
-                             dtype=np.uint64)
+        host_ptrs = np.array([base + i * stride * _F64 for i in range(B)], dtype=np.uint64)
         d = cuda.mem_alloc(host_ptrs.nbytes)
         cuda.memcpy_htod(d, host_ptrs)
         return d
 
     # ----------------------------------------------------------------- solve
-    def reset_refactor(self, Jx_batch: np.ndarray):
+    def reset_refactor(self, Jx_batch: NDArray):
         """Upload new per-system values and run batch reset + refactor.
 
         ``Jx_batch`` is (B, nnz) float64 (or (nnz,) for a single broadcast system).
@@ -309,49 +392,54 @@ class CusolverRfBatch:
         if not self._setup_done:
             raise RuntimeError("call symbolic_setup() first")
         B, nnz = self.batch_size, self.nnz
-        vals = np.ascontiguousarray(
-            np.asarray(Jx_batch, dtype=np.float64).reshape(B, nnz).reshape(-1))
+        vals = np.ascontiguousarray(np.asarray(Jx_batch, dtype=np.float64).reshape(B, nnz).reshape(-1))
         cuda.memcpy_htod(self._d_A_batch, vals)
 
-        _check(_libcusolver.cusolverRfBatchResetValues(
-            B, self.n, nnz,
-            ctypes.c_void_p(int(self._d_Ap)),
-            ctypes.c_void_p(int(self._d_Aj)),
-            ctypes.c_void_p(int(self._d_A_array)),
-            ctypes.c_void_p(int(self._d_P)),
-            ctypes.c_void_p(int(self._d_Q)),
-            self._rfH),
-            "cusolverRfBatchResetValues")
-        _check(_libcusolver.cusolverRfBatchRefactor(self._rfH),
-               "cusolverRfBatchRefactor")
+        _check(
+            _libcusolver.cusolverRfBatchResetValues(
+                B,
+                self.n,
+                nnz,
+                ctypes.c_void_p(int(self._d_Ap)),
+                ctypes.c_void_p(int(self._d_Aj)),
+                ctypes.c_void_p(int(self._d_A_array)),
+                ctypes.c_void_p(int(self._d_P)),
+                ctypes.c_void_p(int(self._d_Q)),
+                self._rfH,
+            ),
+            "cusolverRfBatchResetValues",
+        )
+        _check(_libcusolver.cusolverRfBatchRefactor(self._rfH), "cusolverRfBatchRefactor")
 
-    def batch_solve(self, rhs_batch: np.ndarray) -> np.ndarray:
+    def batch_solve(self, rhs_batch: NDArray) -> NDArray:
         """Solve with the current factorization. ``rhs_batch`` is (B, n) float64.
 
         Returns (B, n) float64. The RHS is overwritten in-place on device by the
         solution (cusolverRfBatchSolve semantics).
         """
         B, n = self.batch_size, self.n
-        rhs = np.ascontiguousarray(
-            np.asarray(rhs_batch, dtype=np.float64).reshape(B, n).reshape(-1))
+        rhs = np.ascontiguousarray(np.asarray(rhs_batch, dtype=np.float64).reshape(B, n).reshape(-1))
         cuda.memcpy_htod(self._d_X_batch, rhs)
 
-        _check(_libcusolver.cusolverRfBatchSolve(
-            self._rfH,
-            ctypes.c_void_p(int(self._d_P)),
-            ctypes.c_void_p(int(self._d_Q)),
-            1,                                   # nrhs (only 1 supported)
-            ctypes.c_void_p(int(self._d_T)),
-            n,                                   # ldt
-            ctypes.c_void_p(int(self._d_X_array)),
-            n),                                  # ldxf
-            "cusolverRfBatchSolve")
+        _check(
+            _libcusolver.cusolverRfBatchSolve(
+                self._rfH,
+                ctypes.c_void_p(int(self._d_P)),
+                ctypes.c_void_p(int(self._d_Q)),
+                1,  # nrhs (only 1 supported)
+                ctypes.c_void_p(int(self._d_T)),
+                n,  # ldt
+                ctypes.c_void_p(int(self._d_X_array)),
+                n,
+            ),  # ldxf
+            "cusolverRfBatchSolve",
+        )
         cuda.Context.synchronize()
-        out = np.empty(B * n, dtype=np.float64)
+        out: NDArray = np.empty(B * n, dtype=np.float64)
         cuda.memcpy_dtoh(out, self._d_X_batch)
         return out.reshape(B, n)
 
-    def solve(self, Jx_batch: np.ndarray, rhs_batch: np.ndarray) -> np.ndarray:
+    def solve(self, Jx_batch: NDArray, rhs_batch: NDArray) -> NDArray:
         """Convenience: reset+refactor with Jx_batch, then solve rhs_batch."""
         self.reset_refactor(Jx_batch)
         return self.batch_solve(rhs_batch)
@@ -384,17 +472,21 @@ class CusolverRfBatch:
         """Batch reset + refactor using values ALREADY in ``d_A_batch`` (no upload)."""
         if not self._setup_done:
             raise RuntimeError("call symbolic_setup() first")
-        _check(_libcusolver.cusolverRfBatchResetValues(
-            self.batch_size, self.n, self.nnz,
-            ctypes.c_void_p(int(self._d_Ap)),
-            ctypes.c_void_p(int(self._d_Aj)),
-            ctypes.c_void_p(int(self._d_A_array)),
-            ctypes.c_void_p(int(self._d_P)),
-            ctypes.c_void_p(int(self._d_Q)),
-            self._rfH),
-            "cusolverRfBatchResetValues")
-        _check(_libcusolver.cusolverRfBatchRefactor(self._rfH),
-               "cusolverRfBatchRefactor")
+        _check(
+            _libcusolver.cusolverRfBatchResetValues(
+                self.batch_size,
+                self.n,
+                self.nnz,
+                ctypes.c_void_p(int(self._d_Ap)),
+                ctypes.c_void_p(int(self._d_Aj)),
+                ctypes.c_void_p(int(self._d_A_array)),
+                ctypes.c_void_p(int(self._d_P)),
+                ctypes.c_void_p(int(self._d_Q)),
+                self._rfH,
+            ),
+            "cusolverRfBatchResetValues",
+        )
+        _check(_libcusolver.cusolverRfBatchRefactor(self._rfH), "cusolverRfBatchRefactor")
 
     def batch_solve_device(self):
         """Solve in place with RHS ALREADY in ``d_X_batch``; solution left on device.
@@ -402,16 +494,19 @@ class CusolverRfBatch:
         No synchronize, no dtoh -- the caller's next kernel consumes ``d_X_batch``. This is
         the hot path of the resident Newton loop.
         """
-        _check(_libcusolver.cusolverRfBatchSolve(
-            self._rfH,
-            ctypes.c_void_p(int(self._d_P)),
-            ctypes.c_void_p(int(self._d_Q)),
-            1,                                   # nrhs (only 1 supported)
-            ctypes.c_void_p(int(self._d_T)),
-            self.n,                              # ldt
-            ctypes.c_void_p(int(self._d_X_array)),
-            self.n),                             # ldxf
-            "cusolverRfBatchSolve")
+        _check(
+            _libcusolver.cusolverRfBatchSolve(
+                self._rfH,
+                ctypes.c_void_p(int(self._d_P)),
+                ctypes.c_void_p(int(self._d_Q)),
+                1,  # nrhs (only 1 supported)
+                ctypes.c_void_p(int(self._d_T)),
+                self.n,  # ldt
+                ctypes.c_void_p(int(self._d_X_array)),
+                self.n,
+            ),  # ldxf
+            "cusolverRfBatchSolve",
+        )
 
     def free(self):
         """Deterministically release device buffers + destroy cusolver handles.
@@ -420,8 +515,7 @@ class CusolverRfBatch:
         rather than at GC time (nondeterministic GC would let successive chunks' buffers
         pile up and re-exhaust the memory that chunking exists to conserve). Idempotent.
         """
-        for name in ("_d_Ap", "_d_Aj", "_d_P", "_d_Q", "_d_A_batch", "_d_A_array",
-                     "_d_X_batch", "_d_X_array", "_d_T"):
+        for name in ("_d_Ap", "_d_Aj", "_d_P", "_d_Q", "_d_A_batch", "_d_A_array", "_d_X_batch", "_d_X_array", "_d_T"):
             buf = getattr(self, name, None)
             if buf is not None:
                 try:

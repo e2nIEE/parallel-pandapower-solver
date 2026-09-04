@@ -9,16 +9,17 @@ Success criterion: total wall-clock for the GPU batched solver
 over T operating points must beat looping the CPU Newton T times, at large T.
 Run as a script to print the table.
 """
+
+import copy
 import sys
 import time
-import copy
 
 import numpy as np
 from pandapower.networks import case9241pegase
 
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
-from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
+from p3s.NewtonPowerflow import NewtonPowerflow
 
 
 def _make_profile(net, T, seed=0):
@@ -34,8 +35,7 @@ def _make_profile(net, T, seed=0):
     scale = 1.0 + 0.05 * rng.standard_normal((n_load, T))  # ~N(1, 0.05) per load/step
     p0 = net.load.p_mw.to_numpy()[:, None]
     q0 = net.load.q_mvar.to_numpy()[:, None]
-    return {("load", "p_mw"): p0 * scale,
-            ("load", "q_mvar"): q0 * scale}, scale
+    return {("load", "p_mw"): p0 * scale, ("load", "q_mvar"): q0 * scale}, scale
 
 
 def _cpu_loop(net, scale):
@@ -80,9 +80,11 @@ def benchmark(T_list=(64, 256, 1024)):
         vm_err = np.abs(np.abs(v_gpu[:, idx]) - np.abs(v_cpu[:, idx])).max()
 
         speedup = cpu_total / gpu_total
-        print(f"T={T:5d} | GPU {gpu_total:8.3f}s ({gpu_total/T*1e3:6.2f} ms/op) | "
-              f"CPU {cpu_total:8.3f}s ({cpu_total/T*1e3:6.2f} ms/op) | "
-              f"speedup {speedup:5.2f}x | vm_err {vm_err:.1e}")
+        print(
+            f"T={T:5d} | GPU {gpu_total:8.3f}s ({gpu_total / T * 1e3:6.2f} ms/op) | "
+            f"CPU {cpu_total:8.3f}s ({cpu_total / T * 1e3:6.2f} ms/op) | "
+            f"speedup {speedup:5.2f}x | vm_err {vm_err:.1e}"
+        )
 
 
 def test_benchmark_smoke():

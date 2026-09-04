@@ -8,17 +8,18 @@ Validates :class:`CusolverRfBatch` against ``scipy.sparse.linalg.spsolve`` on th
 saved Jacobian fixtures (``case*_Jx.npy`` / ``_Jp`` / ``_Jj`` / ``_rhs`` in the repo
 root). Needs only numpy/scipy/pycuda + a CUDA GPU -- no pandapower.
 """
-import os
 
 import numpy as np
 import pytest
-from pandapower.networks import case9241pegase, case118, case14, case9
+from pandapower import runpp
+from pandapower.networks import case9, case14, case118, case9241pegase
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
-from pandapower import runpp
+
 from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
 
 CASES = {"case9": case9(), "case14": case14(), "case118": case118(), "case9241": case9241pegase()}
+
 
 def _load(case):
     """Build the polar NR Jacobian by running pandapower runpp and reading
@@ -58,11 +59,12 @@ def test_batch_solve_matches_scipy(case):
     for i in range(B):
         err = np.linalg.norm(x_gpu[i] - x_ref[i], np.inf)
         denom = max(1.0, np.linalg.norm(x_ref[i], np.inf))
-        assert err / denom < 1e-6, f"{case} system {i}: rel err {err/denom:.3e}"
+        assert err / denom < 1e-6, f"{case} system {i}: rel err {err / denom:.3e}"
 
 
 if __name__ == "__main__":
     import sys
+
     cases = sys.argv[1:] or CASES
     for c in cases:
         test_batch_solve_matches_scipy(c)

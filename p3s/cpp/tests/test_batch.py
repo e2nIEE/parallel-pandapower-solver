@@ -11,15 +11,17 @@ points by perturbing Sbus per column, and asserts:
 
 Run standalone:  python p3s/cpp/test_batch.py
 """
+
 import os
 import sys
 
 import numpy as np
 import scipy.sparse as sp
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _HERE)
-import nr_klu  # noqa: E402
+try:
+    from p3s import nr_klu  # type: ignore[attr-defined]
+except ImportError:
+    from p3s.cpp import nr_klu  # type: ignore[attr-defined]
 
 CASES = ["case9", "case14", "case118", "case9241"]
 
@@ -38,7 +40,9 @@ def _scipy_newton(Yp, Yj, Yx, Sbus, V0, pv, pq, tol=1e-8, max_it=30):
 
     def dSbus_dV(V):
         Ibus = Ybus @ V
-        diagV = sp.diags(V); diagI = sp.diags(Ibus); diagVn = sp.diags(V / np.abs(V))
+        diagV = sp.diags(V)
+        diagI = sp.diags(Ibus)
+        diagVn = sp.diags(V / np.abs(V))
         dS_dVm = diagV @ np.conj(Ybus @ diagVn) + np.conj(diagI) @ diagVn
         dS_dVa = 1j * diagV @ np.conj(diagI - Ybus @ diagV)
         return dS_dVm, dS_dVa
@@ -54,8 +58,10 @@ def _scipy_newton(Yp, Yj, Yx, Sbus, V0, pv, pq, tol=1e-8, max_it=30):
         J22 = dS_dVm[np.ix_(pq, pq)].imag
         J = sp.vstack([sp.hstack([J11, J12]), sp.hstack([J21, J22])], format="csc")
         dx = sp.linalg.spsolve(J, -F)
-        Va = np.angle(V); Vm = np.abs(V)
-        Va[pvpq] += dx[:npv + npq]; Vm[pq] += dx[npv + npq:]
+        Va = np.angle(V)
+        Vm = np.abs(V)
+        Va[pvpq] += dx[: npv + npq]
+        Vm[pq] += dx[npv + npq :]
         V = Vm * np.exp(1j * Va)
         F = mismatch(V)
     return V
@@ -92,8 +98,10 @@ def _check_case(case, T=16, seed=0):
     assert dthread == 0.0, f"{case}: n_threads=1 vs N differ by {dthread:.2e}"
     assert np.array_equal(r1["iterations"], rN["iterations"])
 
-    print(f"[{case}] T={T} n={n}: batch-vs-scipy={err:.2e}  thread-invariance={dthread:.0e}  "
-          f"iters[min..max]={r1['iterations'].min()}..{r1['iterations'].max()}")
+    print(
+        f"[{case}] T={T} n={n}: batch-vs-scipy={err:.2e}  thread-invariance={dthread:.0e}  "
+        f"iters[min..max]={r1['iterations'].min()}..{r1['iterations'].max()}"
+    )
 
 
 if __name__ == "__main__":

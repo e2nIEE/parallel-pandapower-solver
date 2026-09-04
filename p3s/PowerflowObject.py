@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from abc import abstractmethod, ABC, abstractproperty
-from scipy.sparse import coo_matrix, csr_matrix
+from abc import ABC, abstractmethod
+
+from scipy.sparse import csr_matrix
 
 
 class PowerflowObject(ABC):

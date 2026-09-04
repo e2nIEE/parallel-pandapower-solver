@@ -10,22 +10,25 @@
 2. NewtonPowerflow.calculate had _parse_results commented out, so net.res_bus was never
    written. It is now enabled; results must match pandapower runpp.
 """
+
 import copy
 import warnings
 
 import numpy as np
 import pytest
-from scipy.sparse.linalg import MatrixRankWarning
-
-from pandapower.run import runpp
 from pandapower.create import (
-    create_empty_network, create_bus, create_ext_grid,
-    create_line_from_parameters, create_load,
+    create_bus,
+    create_empty_network,
+    create_ext_grid,
+    create_line_from_parameters,
+    create_load,
 )
 from pandapower.networks.power_system_test_cases import case9, case14
+from pandapower.run import runpp
+from scipy.sparse.linalg import MatrixRankWarning
 
-from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.NewtonPowerflow import NewtonPowerflow
 
 
 def _radial_feeder(n_load):
@@ -34,8 +37,14 @@ def _radial_feeder(n_load):
     create_ext_grid(net, b[0], vm_pu=1.0)
     for i in range(n_load):
         create_line_from_parameters(
-            net, b[i], b[i + 1], length_km=0.5,
-            r_ohm_per_km=0.3, x_ohm_per_km=0.4, c_nf_per_km=8.0, max_i_ka=1.0,
+            net,
+            b[i],
+            b[i + 1],
+            length_km=0.5,
+            r_ohm_per_km=0.3,
+            x_ohm_per_km=0.4,
+            c_nf_per_km=8.0,
+            max_i_ka=1.0,
         )
     for i in range(1, n_load + 1):
         create_load(net, b[i], p_mw=0.05, q_mvar=0.02)
@@ -54,12 +63,8 @@ def test_dc_init_no_rank_warning_on_radial_feeder():
         warnings.simplefilter("error", MatrixRankWarning)  # fail the test if it warns
         NewtonPowerflow(work).calculate(work, init="dc", tolerance=1e-8, max_iterations=30)
 
-    np.testing.assert_allclose(
-        work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6
-    )
-    np.testing.assert_allclose(
-        work.res_bus.va_degree.values, ref.res_bus.va_degree.values, rtol=0, atol=1e-6
-    )
+    np.testing.assert_allclose(work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(work.res_bus.va_degree.values, ref.res_bus.va_degree.values, rtol=0, atol=1e-6)
 
 
 @pytest.mark.parametrize("init", ["dc", "flat"])
@@ -75,12 +80,8 @@ def test_newton_writes_res_bus_matching_runpp(init):
         NewtonPowerflow(work).calculate(work, init=init, tolerance=1e-8, max_iterations=30)
 
     assert len(work.res_bus) == len(work.bus)
-    np.testing.assert_allclose(
-        work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6
-    )
-    np.testing.assert_allclose(
-        work.res_bus.va_degree.values, ref.res_bus.va_degree.values, rtol=0, atol=1e-6
-    )
+    np.testing.assert_allclose(work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(work.res_bus.va_degree.values, ref.res_bus.va_degree.values, rtol=0, atol=1e-6)
 
 
 @pytest.mark.parametrize("fn", [case9, case14])
@@ -103,12 +104,8 @@ def test_dc_init_preserves_pv_magnitudes(fn):
         nf.calculate(work, init="dc", tolerance=1e-8, max_iterations=30)
 
     # PV-bus magnitudes must equal their set-points (and runpp), not 1.0.
-    np.testing.assert_allclose(
-        work.res_bus.vm_pu.values[pv], ref.res_bus.vm_pu.values[pv], rtol=0, atol=1e-6
-    )
-    np.testing.assert_allclose(
-        work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6
-    )
+    np.testing.assert_allclose(work.res_bus.vm_pu.values[pv], ref.res_bus.vm_pu.values[pv], rtol=0, atol=1e-6)
+    np.testing.assert_allclose(work.res_bus.vm_pu.values, ref.res_bus.vm_pu.values, rtol=0, atol=1e-6)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ backend built on top of it.
 Enum values are the stable constants from ``cudss.h`` (unchanged across cuDSS 0.x). If a
 future header renumbers them, override the module-level constants below.
 """
+
 import ctypes
 import glob
 import os
@@ -27,8 +28,8 @@ CUDSS_STATUS_SUCCESS = 0
 CUDSS_PHASE_REORDERING = 1 << 0
 CUDSS_PHASE_SYMBOLIC_FACTORIZATION = 1 << 1
 CUDSS_PHASE_ANALYSIS = CUDSS_PHASE_REORDERING | CUDSS_PHASE_SYMBOLIC_FACTORIZATION  # 3
-CUDSS_PHASE_FACTORIZATION = 1 << 2       # 4
-CUDSS_PHASE_REFACTORIZATION = 1 << 3     # 8
+CUDSS_PHASE_FACTORIZATION = 1 << 2  # 4
+CUDSS_PHASE_REFACTORIZATION = 1 << 3  # 8
 CUDSS_PHASE_SOLVE = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8)  # 496 (all SOLVE_*)
 
 # cudssMatrixType_t
@@ -53,8 +54,8 @@ CUDSS_LAYOUT_ROW_MAJOR = 1
 
 # cudaDataType_t (from CUDA library_types.h) -- verified values, NOT sequential:
 CUDA_R_32F = 0
-CUDA_R_64F = 1      # float64 (values, rhs, solution)
-CUDA_R_32I = 10     # int32 (CSR offsets / column indices)
+CUDA_R_64F = 1  # float64 (values, rhs, solution)
+CUDA_R_32I = 10  # int32 (CSR offsets / column indices)
 
 # cudssConfigParam_t -- sequential indices, verified against cudss_data_types.h (cuDSS 0.8,
 # comments stripped before counting). Do NOT guess: a wrong index sets the wrong parameter,
@@ -78,7 +79,7 @@ CUDSS_CONFIG_HOST_NTHREADS = 14
 CUDSS_CONFIG_HYBRID_EXECUTE_MODE = 15
 CUDSS_CONFIG_PIVOT_EPSILON_ALG = 16
 CUDSS_CONFIG_ND_NLEVELS = 17
-CUDSS_CONFIG_UBATCH_SIZE = 18       # uniform-batch size (systems sharing one pattern)
+CUDSS_CONFIG_UBATCH_SIZE = 18  # uniform-batch size (systems sharing one pattern)
 CUDSS_CONFIG_UBATCH_INDEX = 19
 CUDSS_CONFIG_USE_SUPERPANELS = 20
 CUDSS_CONFIG_DEVICE_COUNT = 21
@@ -89,7 +90,7 @@ CUDSS_CONFIG_ND_UBFACTOR = 25
 
 # cudssPivotType_t (verified from cudss_data_types.h)
 CUDSS_PIVOT_AUTO = 0
-CUDSS_PIVOT_NONE = 1        # disable pivot search -- much faster; safe for well-conditioned J
+CUDSS_PIVOT_NONE = 1  # disable pivot search -- much faster; safe for well-conditioned J
 
 
 def _load_cudss():
@@ -104,9 +105,9 @@ def _load_cudss():
         # pip wheel (nvidia-cudss-cuXX): nvidia/cuXX/bin/cudss64_*.dll
         try:
             import site
+
             for b in site.getsitepackages():
-                cands += glob.glob(os.path.join(b, "nvidia", "**", "cudss64_*.dll"),
-                                   recursive=True)
+                cands += glob.glob(os.path.join(b, "nvidia", "**", "cudss64_*.dll"), recursive=True)
         except Exception:
             pass
         p = os.environ.get("CUDA_PATH")
@@ -123,12 +124,12 @@ def _load_cudss():
             dep_dirs += [os.path.join(p, "bin", "x64"), os.path.join(p, "bin")]
         try:
             import site
+
             for b in site.getsitepackages():
-                dep_dirs += glob.glob(os.path.join(b, "nvidia", "**", "bin"),
-                                      recursive=True)
+                dep_dirs += glob.glob(os.path.join(b, "nvidia", "**", "bin"), recursive=True)
         except Exception:
             pass
-        for d in dict.fromkeys(dep_dirs):     # de-dup, keep order
+        for d in dict.fromkeys(dep_dirs):  # de-dup, keep order
             if d and os.path.isdir(d):
                 try:
                     os.add_dll_directory(d)
@@ -146,14 +147,14 @@ def _load_cudss():
     cands = []
     try:
         import site
+
         bases = list(site.getsitepackages())
         try:
             bases.append(site.getusersitepackages())
         except Exception:
             pass
         for b in bases:
-            cands += glob.glob(os.path.join(b, "nvidia", "**", "libcudss.so*"),
-                               recursive=True)
+            cands += glob.glob(os.path.join(b, "nvidia", "**", "libcudss.so*"), recursive=True)
     except Exception:
         pass
     for d in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
@@ -170,7 +171,8 @@ def _load_cudss():
     raise OSError(
         f"could not load libcudss.so (tried {cands}). "
         f"pip install nvidia-cudss-cu12 and/or add its lib dir to LD_LIBRARY_PATH. "
-        f"Last error: {last}")
+        f"Last error: {last}"
+    )
 
 
 _libcudss = _load_cudss()
@@ -188,12 +190,12 @@ def _decl(name, restype, argtypes):
 
 
 # --- lifecycle --------------------------------------------------------------
-_decl("cudssCreate", _I, [_VP])                       # cudssHandle_t*
+_decl("cudssCreate", _I, [_VP])  # cudssHandle_t*
 _decl("cudssDestroy", _I, [_VP])
 _decl("cudssConfigCreate", _I, [_VP])
 _decl("cudssConfigDestroy", _I, [_VP])
-_decl("cudssDataCreate", _I, [_VP, _VP])              # handle, cudssData_t*
-_decl("cudssDataDestroy", _I, [_VP, _VP])             # handle, cudssData_t
+_decl("cudssDataCreate", _I, [_VP, _VP])  # handle, cudssData_t*
+_decl("cudssDataDestroy", _I, [_VP, _VP])  # handle, cudssData_t
 _decl("cudssSetStream", _I, [_VP, _VP])
 # cudssConfigSet(config, param, value, sizeInBytes)
 _decl("cudssConfigSet", _I, [_VP, _I, _VP, ctypes.c_size_t])
@@ -206,18 +208,14 @@ except AttributeError:
 
 # --- matrix wrappers --------------------------------------------------------
 # single CSR (used for the representative/analysis matrix if needed)
-_decl("cudssMatrixCreateCsr", _I,
-      [_VP, _I64, _I64, _I64, _VP, _VP, _VP, _VP, _I, _I, _I, _I, _I, _I])
-_decl("cudssMatrixCreateDn", _I,
-      [_VP, _I64, _I64, _I64, _VP, _I, _I])
+_decl("cudssMatrixCreateCsr", _I, [_VP, _I64, _I64, _I64, _VP, _VP, _VP, _VP, _I, _I, _I, _I, _I, _I])
+_decl("cudssMatrixCreateDn", _I, [_VP, _I64, _I64, _I64, _VP, _I, _I])
 
 # batched CSR: nrows/ncols/nnz are POINTERS to per-batch arrays; rowStart/rowEnd/colInd/
 # values are ARRAYS OF DEVICE POINTERS (const void* const*). We pass all as c_void_p to
 # device buffers we build in CudssBatch.
-_decl("cudssMatrixCreateBatchCsr", _I,
-      [_VP, _I64, _VP, _VP, _VP, _VP, _VP, _VP, _VP, _I, _I, _I, _I, _I, _I])
-_decl("cudssMatrixCreateBatchDn", _I,
-      [_VP, _I64, _VP, _VP, _VP, _VP, _I, _I, _I])
+_decl("cudssMatrixCreateBatchCsr", _I, [_VP, _I64, _VP, _VP, _VP, _VP, _VP, _VP, _VP, _I, _I, _I, _I, _I, _I])
+_decl("cudssMatrixCreateBatchDn", _I, [_VP, _I64, _VP, _VP, _VP, _VP, _I, _I, _I])
 _decl("cudssMatrixDestroy", _I, [_VP])
 
 # --- execute ----------------------------------------------------------------

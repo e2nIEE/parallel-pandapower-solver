@@ -3,24 +3,46 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import importlib.resources
-from pycuda.compiler import SourceModule
-import pycuda.gpuarray as gpuarray
-import pycuda.driver as cuda
+
 import numpy as np
-from typing import Tuple
+from numpy.typing import NDArray
+import pycuda.driver as cuda
+import pycuda.gpuarray as gpuarray
+from pycuda.compiler import SourceModule
 
 
 def get_ybus_diag_ix(Ybus_indices, Ybus_indptr, N_YBUS_SHAPE):
     diag_data_ix = np.zeros(N_YBUS_SHAPE, dtype=np.int32)
     for col in range(N_YBUS_SHAPE):
-        for data_ix, row_ix in zip(range(Ybus_indptr[col], Ybus_indptr[col+1]),
-                                   Ybus_indices[Ybus_indptr[col]:Ybus_indptr[col+1]]):
+        for data_ix, row_ix in zip(
+            range(Ybus_indptr[col], Ybus_indptr[col + 1]),
+            Ybus_indices[Ybus_indptr[col] : Ybus_indptr[col + 1]],
+            strict=False,
+        ):
             if row_ix == col:
                 diag_data_ix[row_ix] = data_ix
     return diag_data_ix
 
 
-def _prepare_y_gpu(Yp, Yj, Yx, pv, pq) -> Tuple[gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, gpuarray, int, int, int, int, int]:
+def _prepare_y_gpu(
+    Yp, Yj, Yx, pv, pq
+) -> tuple[
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    gpuarray,
+    int,
+    int,
+    int,
+    int,
+    int,
+]:
     """
     This function takes an admittance matrix, calculates the diagonal array Yd and pvpq_pos / pq_pos.
     Then it transfers everything to the gpu and returns all the pointers.
@@ -34,15 +56,15 @@ def _prepare_y_gpu(Yp, Yj, Yx, pv, pq) -> Tuple[gpuarray, gpuarray, gpuarray, gp
 
     Yd = get_ybus_diag_ix(Yj, Yp, n_buses)
 
-    pvpq_pos = -np.ones(n_buses, dtype=int)
+    pvpq_pos: NDArray = -np.ones(n_buses, dtype=int)
     for pos, bus in enumerate(pvpq):
         pvpq_pos[bus] = pos
 
-    pq_pos = -np.ones(n_buses, dtype=int)
+    pq_pos: NDArray = -np.ones(n_buses, dtype=int)
     for pos, bus in enumerate(pq):
         pq_pos[bus] = pos
 
-    pv_pos = -np.ones(n_buses, dtype=int)
+    pv_pos: NDArray = -np.ones(n_buses, dtype=int)
     for pos, bus in enumerate(pv):
         pv_pos[bus] = pos
 
@@ -52,36 +74,46 @@ def _prepare_y_gpu(Yp, Yj, Yx, pv, pq) -> Tuple[gpuarray, gpuarray, gpuarray, gp
     Yj_gpu = gpuarray.to_gpu(Yj.astype(np.int32))
     Yd_gpu = gpuarray.to_gpu(Yd.astype(np.int32))
 
-    #print(f"PV: {pv}")
+    # print(f"PV: {pv}")
     pv_gpu = gpuarray.to_gpu(np.array(pv, dtype=np.int32))
     pv_pos_gpu = gpuarray.to_gpu(np.array(pv_pos, dtype=np.int32))
 
     pvpq_gpu = gpuarray.to_gpu(np.array(pvpq, dtype=np.int32))
     pvpq_pos_gpu = gpuarray.to_gpu(np.array(pvpq_pos, dtype=np.int32))
 
-    #print(f"PV: {pq}")
+    # print(f"PV: {pq}")
     pq_gpu = gpuarray.to_gpu(np.array(pq, dtype=np.int32))
     pq_pos_gpu = gpuarray.to_gpu(np.array(pq_pos, dtype=np.int32))
 
-    return Yx_gpu, Yp_gpu, Yj_gpu, Yd_gpu, pq_gpu, pq_pos_gpu, pv_gpu, pv_pos_gpu, pvpq_gpu, pvpq_pos_gpu, lpvpq, lpq, lpv, n_elements, n_buses
+    return (
+        Yx_gpu,
+        Yp_gpu,
+        Yj_gpu,
+        Yd_gpu,
+        pq_gpu,
+        pq_pos_gpu,
+        pv_gpu,
+        pv_pos_gpu,
+        pvpq_gpu,
+        pvpq_pos_gpu,
+        lpvpq,
+        lpq,
+        lpv,
+        n_elements,
+        n_buses,
+    )
 
 
 class PQPVCuda:
-
-    def __init__(self, Yp, Yj, Yx, pv, pq, arch: str="sm_86"):
+    def __init__(self, Yp, Yj, Yx, pv, pq, arch: str = "sm_86"):
         super().__init__()
 
         # -- read cuda code --
-        with importlib.resources.files("p3s.cuda").joinpath("jacobian_kernels.cu").open('r') as f:
+        with importlib.resources.files("p3s.cuda").joinpath("jacobian_kernels.cu").open("r") as f:
             cuda_source = f.read()
 
         # -- compile cuda code --
-        options = [
-            "-O3",
-            "-rdc=false",
-            "--use_fast_math",
-            f"-gencode=arch=compute_{arch.split('_')[-1]},code={arch}"
-        ]
+        options = ["-O3", "-rdc=false", "--use_fast_math", f"-gencode=arch=compute_{arch.split('_')[-1]},code={arch}"]
 
         self.cuda_module = SourceModule(cuda_source, options=options, arch=arch)
 
@@ -97,24 +129,25 @@ class PQPVCuda:
         self.convert_counts_to_offsets = self.cuda_module.get_function("convert_counts_to_offsets")
 
         # -- init all variables --
-        (self.Yx_gpu,
-         self.Yp_gpu,
-         self.Yj_gpu,
-         self.Yd_gpu,
-         self.pq_gpu,
-         self.pq_pos_gpu,
-         self.pv_gpu,
-         self.pv_pos_gpu,
-         self.pvpq_gpu,
-         self.pvpq_pos_gpu,
-         self.lpvpq,
-         self.lpq,
-         self.lpv,
-         self.n_elements,
-         self.n_buses) = _prepare_y_gpu(Yp, Yj, Yx, pv, pq)
+        (
+            self.Yx_gpu,
+            self.Yp_gpu,
+            self.Yj_gpu,
+            self.Yd_gpu,
+            self.pq_gpu,
+            self.pq_pos_gpu,
+            self.pv_gpu,
+            self.pv_pos_gpu,
+            self.pvpq_gpu,
+            self.pvpq_pos_gpu,
+            self.lpvpq,
+            self.lpq,
+            self.lpv,
+            self.n_elements,
+            self.n_buses,
+        ) = _prepare_y_gpu(Yp, Yj, Yx, pv, pq)
 
-
-    def create_J_cuda(self, voltage, Yp, Yj, Yx, pv, pq, update_only=False) -> Tuple[gpuarray, gpuarray, gpuarray, int]:
+    def create_J_cuda(self, voltage, Yp, Yj, Yx, pv, pq, update_only=False) -> tuple[gpuarray, gpuarray, gpuarray, int]:
         """
         calculate a new Jacobian via cuda. If update_only is set, it is assumed,
         that all the arrays / sparse matrices are already uploaded to the gpu.
@@ -126,21 +159,23 @@ class PQPVCuda:
 
         # if only updating is selected, it is assumed, that all the arrays / matrices are already uploaded to the gpu
         if not update_only:
-            (self.Yx_gpu,
-             self.Yp_gpu,
-             self.Yj_gpu,
-             self.Yd_gpu,
-             self.pq_gpu,
-             self.pq_pos_gpu,
-             self.pv_gpu,
-             self.pv_pos_gpu,
-             self.pvpq_gpu,
-             self.pvpq_pos_gpu,
-             self.lpvpq,
-             self.lpq,
-             self.lpv,
-             self.n_elements,
-             self.n_buses) = _prepare_y_gpu(Yp, Yj, Yx, pv, pq)
+            (
+                self.Yx_gpu,
+                self.Yp_gpu,
+                self.Yj_gpu,
+                self.Yd_gpu,
+                self.pq_gpu,
+                self.pq_pos_gpu,
+                self.pv_gpu,
+                self.pv_pos_gpu,
+                self.pvpq_gpu,
+                self.pvpq_pos_gpu,
+                self.lpvpq,
+                self.lpq,
+                self.lpv,
+                self.n_elements,
+                self.n_buses,
+            ) = _prepare_y_gpu(Yp, Yj, Yx, pv, pq)
 
         # calculate the actual Jacobian on the gpu using jacobian_kernels.cu
         Jx_gpu, Jp_gpu, Jj_gpu, nnz = self._update_J_cuda(
@@ -162,9 +197,9 @@ class PQPVCuda:
 
         return Jx_gpu, Jp_gpu, Jj_gpu, nnz
 
-
-    def _update_J_cuda(self,
-        voltage: np.ndarray,
+    def _update_J_cuda(
+        self,
+        voltage: NDArray,
         Yp_gpu: gpuarray,
         Yj_gpu: gpuarray,
         Yx_gpu: gpuarray,
@@ -178,7 +213,8 @@ class PQPVCuda:
         n_elements: int,
         n_buses: int,
         # cuda_module: SourceModule,
-        block_size=256) -> Tuple[gpuarray, gpuarray, gpuarray, int]:
+        block_size=256,
+    ) -> tuple[gpuarray, gpuarray, gpuarray, int]:
         """Create Jacobian using CUDA acceleration."""
 
         # Get CSR representation of YBus
@@ -225,7 +261,7 @@ class PQPVCuda:
             dS_dVa_gpu.gpudata,
             np.int32(n_buses),
             block=(block_size, 1, 1),
-            grid=(grid_size, 1)
+            grid=(grid_size, 1),
         )
 
         # Allocate Jacobian CSR arrays on GPU
@@ -257,16 +293,12 @@ class PQPVCuda:
             np.int32(lpq),
             np.int32(n_buses),
             block=(block_size, 1, 1),
-            grid=(grid_size_j, 1)
+            grid=(grid_size_j, 1),
         )
 
         # Convert counts to offsets
         self.convert_counts_to_offsets(
-            Jp_offsets_gpu.gpudata,
-            np.int32(n_rows),
-            nnz_gpu.gpudata,
-            block=(1, 1, 1),
-            grid=(1, 1)
+            Jp_offsets_gpu.gpudata, np.int32(n_rows), nnz_gpu.gpudata, block=(1, 1, 1), grid=(1, 1)
         )
 
         # Second pass: fill actual values
@@ -285,7 +317,7 @@ class PQPVCuda:
             np.int32(lpvpq),
             np.int32(lpq),
             block=(block_size, 1, 1),
-            grid=(grid_size_j, 1)
+            grid=(grid_size_j, 1),
         )
 
         # Copy final Jp back
@@ -302,12 +334,11 @@ class PQPVCuda:
 
         return Jx, Jp, Jj, nnz
 
-
     def evaluate_Results_cuda(self, dx, voltage, block_size=256):
         """CUDA version of evaluate_Results"""
-        #npq = len(self._pq)
+        # npq = len(self._pq)
         npq = self.lpq
-        #npv = len(self._pv)
+        # npv = len(self._pv)
         npv = self.lpv
 
         # Convert to GPU arrays
@@ -342,7 +373,7 @@ class PQPVCuda:
             np.int32(self.lpvpq),
             # np.int32(self._offset),
             block=(block_size, 1, 1),
-            grid=(grid_size, 1)
+            grid=(grid_size, 1),
         )
 
         # Combine real and imaginary parts back to complex
@@ -356,9 +387,7 @@ class PQPVCuda:
 
         return result_gpu
 
-
-    def evaluate_Fx_cuda(self, Sbus_gpu, voltage_gpu, block_size=256) -> Tuple[gpuarray, bool]:
-
+    def evaluate_Fx_cuda(self, Sbus_gpu, voltage_gpu, block_size=256) -> tuple[gpuarray, bool]:
         """CUDA version of evaluate_Fx"""
         # Convert to GPU arrays
         # Sbus_gpu = gpuarray.to_gpu(Sbus.astype(np.complex128))
@@ -372,8 +401,8 @@ class PQPVCuda:
         npv = self.lpv
         npq = self.lpq
 
-        #print(f"npv: {npv}")
-        #print(f"npq: {npq}")
+        # print(f"npv: {npv}")
+        # print(f"npq: {npq}")
 
         # Result array
         F_gpu = gpuarray.empty(npv + 2 * npq, dtype=np.float64)
@@ -394,11 +423,10 @@ class PQPVCuda:
             np.int32(npq),
             np.int32(self.n_buses),
             block=(block_size, 1, 1),
-            grid=(grid_size, 1)
+            grid=(grid_size, 1),
         )
 
         return F_gpu
-
 
     def calculate_norm(self, mismatch_gpu, tolerance, block_size=256):
         # Use a fixed, small number of blocks for the norm kernel
@@ -418,25 +446,20 @@ class PQPVCuda:
             norm_buffer,
             block=(block_size, 1, 1),
             grid=(grid_size, 1),
-            shared=block_size * 8
+            shared=block_size * 8,
         )
 
         # Kernel 3
         result_gpu = gpuarray.empty(1, dtype=np.int32)
 
-        self.check_convergence_kernel(
-            norm_buffer,
-            np.float64(tolerance),
-            result_gpu,
-            block=(1, 1, 1),
-            grid=(1, 1)
-        )
+        self.check_convergence_kernel(norm_buffer, np.float64(tolerance), result_gpu, block=(1, 1, 1), grid=(1, 1))
         return True if result_gpu.get()[0] == 1 else False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from scipy.sparse import csr_matrix
     from scipy.sparse.linalg import spsolve
+
     Yx = np.load(r"Yx.npy")
     Yj = np.load(r"Yj.npy")
     Yp = np.load(r"Yp.npy")
@@ -449,7 +472,7 @@ if __name__ == '__main__':
     mismatch = np.load(r"mismatch.npy")
     sbus = np.load(r"sbus.npy")
 
-    t = PQPVCuda()
+    t = PQPVCuda(Yp, Yj, Yx, pv, pq)
     Jx_gpu, Jp_gpu, Jj_gpu, nnz = t.create_J_cuda(voltage, Yp, Yj, Yx, pv, pq)
 
     Jx = Jx_gpu.get()
@@ -466,12 +489,12 @@ if __name__ == '__main__':
     J2 = csr_matrix((Jx2, Jj2, Jp2))
     dx2 = -1 * spsolve(J2, mismatch)
 
-    assert(np.array_equal(dx, dx2))
+    assert np.array_equal(dx, dx2)
 
     sbus_gpu = gpuarray.to_gpu(sbus.astype(np.complex128))
     voltage_gpu = gpuarray.to_gpu(voltage.astype(np.complex128))
 
     mismatch_gpu = t.evaluate_Fx_cuda(sbus_gpu, voltage_gpu=voltage_gpu)
 
-    converged = t.calculate_norm(mismatch_gpu, tolerance=1E-5)
+    converged = t.calculate_norm(mismatch_gpu, tolerance=1e-5)
     print(converged)
