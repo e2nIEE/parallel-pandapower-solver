@@ -5,17 +5,17 @@
 import warnings
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
-from p3s.models.TwoPort import TwoPort
-from p3s.models.ThreePort import ThreePort
+from numpy.typing import NDArray
 from pandapower import LoadflowNotConverged, pandapowerNet
 from scipy.sparse import csr_matrix as sparse
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
 from p3s.models.ShuntModel import ShuntModel
+from p3s.models.ThreePort import ThreePort
 from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
 from p3s.models.TransmissionLineModel import TransmissionLineModel
+from p3s.models.TwoPort import TwoPort
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow

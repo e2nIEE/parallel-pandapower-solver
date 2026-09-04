@@ -33,10 +33,10 @@ from dataclasses import dataclass
 
 import networkx as nx
 import numpy as np
-from numpy.typing import NDArray
 import pandapower as pp
 import pandapower.topology as top
 import pandas as pd
+from numpy.typing import NDArray
 
 
 @dataclass

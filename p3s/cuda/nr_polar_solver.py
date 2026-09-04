@@ -23,8 +23,8 @@ from __future__ import annotations
 import os
 
 import numpy as np
-from numpy.typing import NDArray
 import pycuda.driver as cuda
+from numpy.typing import NDArray
 from pycuda.compiler import SourceModule
 
 from p3s.cuda import _ctx  # noqa: F401  (retains the CUDA primary context; cuDSS-safe)

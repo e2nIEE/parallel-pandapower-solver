@@ -4,8 +4,8 @@
 
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
+from numpy.typing import NDArray
 from pandapower import LoadflowNotConverged, pandapowerNet
 from scipy.sparse import coo_matrix
 from scipy.sparse import coo_matrix as sparse

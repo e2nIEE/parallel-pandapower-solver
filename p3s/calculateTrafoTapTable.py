@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
+from numpy.typing import NDArray
 from pandapower.auxiliary import pandapowerNet
 
 

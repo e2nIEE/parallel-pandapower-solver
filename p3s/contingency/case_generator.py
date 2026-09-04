@@ -32,8 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from numpy.typing import NDArray
 import scipy.sparse as sp
+from numpy.typing import NDArray
 
 from p3s.contingency.ground_truth import enumerate_contingencies, generator_z_pu
 

@@ -5,9 +5,9 @@
 import importlib.resources
 
 import numpy as np
-from numpy.typing import NDArray
 import pycuda.driver as cuda
 import pycuda.gpuarray as gpuarray
+from numpy.typing import NDArray
 from pycuda.compiler import SourceModule
 
 

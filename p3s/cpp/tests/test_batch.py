@@ -23,6 +23,9 @@ try:
 except ImportError:
     from p3s.cpp import nr_klu  # type: ignore[attr-defined]
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
 CASES = ["case9", "case14", "case118", "case9241"]
 
 

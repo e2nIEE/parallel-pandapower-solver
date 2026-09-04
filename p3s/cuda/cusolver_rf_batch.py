@@ -35,8 +35,8 @@ factorization across multiple right-hand sides.
 import ctypes
 
 import numpy as np
-from numpy.typing import NDArray
 import pycuda.driver as cuda
+from numpy.typing import NDArray
 
 from p3s.cuda import _ctx  # noqa: F401  (CUDA primary context; shared with cuDSS/kernels)
 from p3s.cuda.CuSolverWrapper import _libcusolver, _libcusparse
