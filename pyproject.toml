@@ -44,7 +44,7 @@ dependencies = [
     "intel-cmplr-lib-rt",
     "numba"
 ]
-requires-python = ">= 3.11"
+requires-python = ">= 3.12"
 
 [project.optional-dependencies]
 docs = [
@@ -60,6 +60,8 @@ test = [
     "ruff",  # linting
     "ty", # checking types
     "ipdb", # debugging
+    "pandas-stubs", # linting
+    "mypy" # linting
 ]
 # Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because it
 # needs a C++17 compiler and SuiteSparse/KLU at build time. Installs the separate

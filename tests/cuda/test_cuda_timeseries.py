@@ -8,6 +8,7 @@ For each time step the batched GPU solver must converge to the same bus voltages
 per-step CPU reference (pandapower ``runpp`` at that operating point). Uses a synthetic
 load-scaling profile so the test is hermetic (no simbench/network fetch).
 """
+
 import copy
 
 import numpy as np
@@ -29,10 +30,10 @@ def _make_profile(net, T, seed=0):
     """
     rng = np.random.default_rng(seed)
     scale = 0.7 + 0.6 * rng.random(T)  # in [0.7, 1.3]
-    p0 = net.load.p_mw.to_numpy()[:, None]      # (n_load, 1)
+    p0 = net.load.p_mw.to_numpy()[:, None]  # (n_load, 1)
     q0 = net.load.q_mvar.to_numpy()[:, None]
     ts = {
-        ("load", "p_mw"): p0 * scale[None, :],   # (n_load, T)
+        ("load", "p_mw"): p0 * scale[None, :],  # (n_load, T)
         ("load", "q_mvar"): q0 * scale[None, :],
     }
     return ts, scale

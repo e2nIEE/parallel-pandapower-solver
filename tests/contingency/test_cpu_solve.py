@@ -13,20 +13,18 @@ multi-branch groups, and the optional island re-slacking.
 Requires the compiled ``nr_klu`` with ``solve_batch_contingency`` (build the C++
 extension: ``pip install ./p3s/cpp``).
 """
+
 import numpy as np
 import pytest
 
 from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import ground_truth
+from p3s.contingency.solver_cpp import solve_contingencies_cpp
 
 # Skip the whole module cleanly if the compiled solver (or the new method) is absent.
-nr_klu = pytest.importorskip("p3s.cpp.nr_klu",
-                             reason="compiled nr_klu not built")
+nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
 if not hasattr(nr_klu.Solver, "solve_batch_contingency"):
-    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)",
-                allow_module_level=True)
-
-from p3s.contingency.solver_cpp import solve_contingencies_cpp
+    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)", allow_module_level=True)
 
 
 def _assert_matches_ground_truth(res, gt, reslack):
@@ -95,4 +93,5 @@ def test_threads_give_identical_results():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v"]))

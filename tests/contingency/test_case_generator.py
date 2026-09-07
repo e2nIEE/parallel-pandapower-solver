@@ -16,20 +16,21 @@ flow solve and NO compiled backend (the case generator is pure NumPy/SciPy):
   3. The served mask + reference resolution match the Phase 0 pandapower ground truth,
      both with re-slacking off and on.
 """
+
 import copy
 
 import numpy as np
-import scipy.sparse as sp
 import pytest
+import scipy.sparse as sp
 
-from p3s.NewtonPowerflow import NewtonPowerflow
-from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.case_generator import (
-    generate_cases,
-    ContingencyCaseGenerator,
     REF_RESLACK_GEN,
+    ContingencyCaseGenerator,
+    generate_cases,
 )
+from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import ground_truth
+from p3s.NewtonPowerflow import NewtonPowerflow
 
 
 def _rebuilt_ybus_without_group(net, group):
@@ -75,7 +76,7 @@ def test_parallel_branch_keeps_other_line_contribution():
     off-diagonal (proves stamp subtraction, not entry zeroing)."""
     net = FIXTURES["parallel_branch"]()
     batch = generate_cases(net, reslack_islands=False)
-    case = batch.cases[0]   # "one_of_two"
+    case = batch.cases[0]  # "one_of_two"
     M = sp.csr_matrix((case.Yx, batch.Yj, batch.Yp), shape=(batch.n_bus,) * 2)
     # buses 0 and 1 are the parallel pair; off-diagonal must be non-zero (one line left)
     assert abs(M[0, 1]) > 1e-6
@@ -113,7 +114,7 @@ def test_generator_island_reslacking_matches_ground_truth():
     off = generate_cases(net, reslack_islands=False).cases[0]
     gt_off = ground_truth(net, reslack_islands=False)["tie"]
     assert np.array_equal(off.served, gt_off.served)
-    assert off.pinned_refs == []   # nothing promoted
+    assert off.pinned_refs == []  # nothing promoted
 
     on = generate_cases(net, reslack_islands=True).cases[0]
     gt_on = ground_truth(net, reslack_islands=True)["tie"]
@@ -130,8 +131,9 @@ def test_lowest_z_generator_is_chosen_among_several():
     net = FIXTURES["generator_island"]()
     # add a second, weaker (higher Z) generator in cluster B (bus g0 = index 2)
     import pandapower as pp
+
     g2 = pp.create_gen(net, 2, p_mw=2.0, vm_pu=1.0, sn_mva=10.0)
-    net.gen.loc[g2, "xdss_pu"] = 0.40   # higher Z than the existing 0.18 gen
+    net.gen.loc[g2, "xdss_pu"] = 0.40  # higher Z than the existing 0.18 gen
     net.gen.loc[g2, "rdss_ohm"] = 0.01
     net.gen.loc[g2, "vn_kv"] = net.bus.vn_kv[2]
 
@@ -167,4 +169,5 @@ def test_vectorized_build_matches_per_case(name, reslack):
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v"]))

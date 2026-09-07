@@ -8,6 +8,7 @@ Single operating-point ``calculate_cuda`` (batch size 1) must converge to the
 same bus voltages as pandapower's ``runpp``. Needs the full p3s stack
 (numba + pandapower) plus a CUDA GPU.
 """
+
 import copy
 
 import numpy as np

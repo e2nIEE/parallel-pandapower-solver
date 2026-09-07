@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Optional
-from scipy.sparse import coo_matrix as sparse
+
 import numpy as np
+from numpy.typing import NDArray
+from scipy.sparse import coo_matrix as sparse
+
 
 class TwoPort:
     def __init__(self):
@@ -19,18 +21,18 @@ class TwoPort:
         self._DC_Ytf = []
         self._DC_Ytt = []
 
-        self.y_matrix: Optional[sparse] = None
-        self.yf_matrix: Optional[sparse] = None
-        self.yt_matrix: Optional[sparse] = None
+        self.y_matrix: sparse | None = None
+        self.yf_matrix: sparse | None = None
+        self.yt_matrix: sparse | None = None
 
-        self.y_dc_matrix: Optional[sparse] = None
+        self.y_dc_matrix: sparse | None = None
         # TODO: decide if a branch directional dc powerflow is needed.
-        self.yf_dc_matrix: Optional[sparse] = None
-        self.yt_dc_matrix: Optional[sparse] = None
+        self.yf_dc_matrix: sparse | None = None
+        self.yt_dc_matrix: sparse | None = None
 
-        self._n_bus: Optional[int] = None
+        self._n_bus: int | None = None
 
-    def _apply_in_service(self, element_table) -> np.ndarray:
+    def _apply_in_service(self, element_table) -> NDArray:
         """Zero this element's branch stamps wherever ``in_service`` is False.
 
         An out-of-service branch is electrically absent: it must contribute nothing to
@@ -50,8 +52,7 @@ class TwoPort:
         if in_service.all():
             return in_service
 
-        for attr in ("_Y_ff", "_Y_ft", "_Y_tf", "_Y_tt",
-                     "_DC_Yff", "_DC_Yft", "_DC_Ytf", "_DC_Ytt"):
+        for attr in ("_Y_ff", "_Y_ft", "_Y_tf", "_Y_tt", "_DC_Yff", "_DC_Yft", "_DC_Ytf", "_DC_Ytt"):
             values = getattr(self, attr, None)
             if values is None or len(np.shape(values)) == 0:
                 continue
@@ -92,12 +93,13 @@ class TwoPort:
         # line indices repeated for the two (forward / to) entries per branch
         i = np.concatenate([np.arange(n_lines), np.arange(n_lines)])
         # forward matrix uses (yff at fb, yft at tb); to matrix uses (ytt at tb, ytf at fb)
-        self.yf_matrix = sparse((np.concatenate([yff, yft]), (i, np.concatenate([fb, tb]))),
-                                shape=(n_lines, n_bus), dtype=complex)
-        self.yt_matrix = sparse((np.concatenate([ytt, ytf]), (i, np.concatenate([tb, fb]))),
-                                shape=(n_lines, n_bus), dtype=complex)
+        self.yf_matrix = sparse(
+            (np.concatenate([yff, yft]), (i, np.concatenate([fb, tb]))), shape=(n_lines, n_bus), dtype=complex
+        )
+        self.yt_matrix = sparse(
+            (np.concatenate([ytt, ytf]), (i, np.concatenate([tb, fb]))), shape=(n_lines, n_bus), dtype=complex
+        )
         return self.y_matrix
-
 
     def create_y_dc_matrix(self, n_bus: int) -> sparse:
         if self.y_dc_matrix and n_bus == self._n_bus:
@@ -109,13 +111,14 @@ class TwoPort:
         tb = np.asarray(self._to_bus, dtype=np.intp)
         rows = np.concatenate([fb, fb, tb, tb])
         cols = np.concatenate([fb, tb, fb, tb])
-        data = np.concatenate([
-            np.asarray(self._DC_Yff, dtype=complex),
-            np.asarray(self._DC_Yft, dtype=complex),
-            np.asarray(self._DC_Ytf, dtype=complex),
-            np.asarray(self._DC_Ytt, dtype=complex),
-        ])
-
+        data = np.concatenate(
+            [
+                np.asarray(self._DC_Yff, dtype=complex),
+                np.asarray(self._DC_Yft, dtype=complex),
+                np.asarray(self._DC_Ytf, dtype=complex),
+                np.asarray(self._DC_Ytt, dtype=complex),
+            ]
+        )
 
         self.y_dc_matrix = sparse((data, (rows, cols)), shape=(n_bus, n_bus), dtype=complex)
         return self.y_dc_matrix

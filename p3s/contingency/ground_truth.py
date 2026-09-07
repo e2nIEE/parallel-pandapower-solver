@@ -25,24 +25,26 @@ gets NaN in ``res_bus`` while the case still converges (verified on case14). For
 optional re-slacking path, an islanded generator with short-circuit data is promoted
 to an ext_grid before the reference solve (lowest-Z generator per island).
 """
+
 from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
 
+import networkx as nx
 import numpy as np
-import pandas as pd
 import pandapower as pp
 import pandapower.topology as top
-import networkx as nx
+import pandas as pd
+from numpy.typing import NDArray
 
 
 @dataclass
 class ContingencyResult:
     group: str
-    vm: np.ndarray          # (n_bus,) pu, NaN where unserved
-    va: np.ndarray          # (n_bus,) deg, NaN where unserved
-    served: np.ndarray      # (n_bus,) bool
+    vm: NDArray  # (n_bus,) pu, NaN where unserved
+    va: NDArray  # (n_bus,) deg, NaN where unserved
+    served: NDArray  # (n_bus,) bool
     converged: bool
 
 
@@ -88,9 +90,9 @@ def generator_z_pu(net) -> pd.Series:
     else:
         vn_kv = vn_kv.astype(float).to_numpy()
     sn = gen["sn_mva"].astype(float).to_numpy()
-    z_base = np.where(sn > 0, (vn_kv ** 2) / sn, np.nan)
+    z_base = np.where(sn > 0, (vn_kv**2) / sn, np.nan)
     rdss_pu = rdss_ohm.to_numpy() / z_base
-    z = np.sqrt(rdss_pu ** 2 + xdss.to_numpy() ** 2)
+    z = np.sqrt(rdss_pu**2 + xdss.to_numpy() ** 2)
     return pd.Series(z, index=gen.index)
 
 
@@ -110,19 +112,17 @@ def _reslack_islands(net):
     promoted = []
     for comp in _connected_components(net):
         if comp & ref_buses:
-            continue   # island already has an original slack
+            continue  # island already has an original slack
         # candidate generators in this island with valid Z
-        cand = [gi for gi in net.gen.index
-                if net.gen.in_service[gi] and net.gen.bus[gi] in comp and np.isfinite(z[gi])]
+        cand = [gi for gi in net.gen.index if net.gen.in_service[gi] and net.gen.bus[gi] in comp and np.isfinite(z[gi])]
         if not cand:
-            continue   # truly unserved -> leave it; pandapower will NaN the buses
+            continue  # truly unserved -> leave it; pandapower will NaN the buses
         best = min(cand, key=lambda gi: z[gi])
         gbus = net.gen.bus[best]
         vm = net.gen.vm_pu[best]
         # promote: drop the gen, add an ext_grid at its bus with the gen's vm setpoint
         net.gen.loc[best, "in_service"] = False
-        pp.create_ext_grid(net, gbus, vm_pu=vm, va_degree=0.0,
-                           name=f"reslack_gen_{best}")
+        pp.create_ext_grid(net, gbus, vm_pu=vm, va_degree=0.0, name=f"reslack_gen_{best}")
         promoted.append(best)
     return promoted
 
@@ -151,11 +151,9 @@ def solve_contingency(net, group, reslack_islands: bool = False) -> ContingencyR
         converged = False
 
     served = np.isfinite(vm)
-    return ContingencyResult(group=group, vm=vm, va=va, served=served,
-                             converged=converged)
+    return ContingencyResult(group=group, vm=vm, va=va, served=served, converged=converged)
 
 
 def ground_truth(net, reslack_islands: bool = False) -> dict[str, ContingencyResult]:
     """Reference results for ALL contingencies in ``net``, keyed by outage_group."""
-    return {g: solve_contingency(net, g, reslack_islands=reslack_islands)
-            for g in enumerate_contingencies(net)}
+    return {g: solve_contingency(net, g, reslack_islands=reslack_islands) for g in enumerate_contingencies(net)}

@@ -2,72 +2,84 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from pandas import DataFrame
 import numpy as np
+from numpy.typing import NDArray
+from pandas import DataFrame
+
 from p3s.models.ThreePort import ThreePort
 
 
 class ThreeWindingTransformerModel(ThreePort):
-    def __init__(self,
-                 trafo3w_table: DataFrame,
-                 bus_table: DataFrame,
-                 tap_table: DataFrame,
-                 trafo3w_model: str = 't',
-                 sn_mva: float = 1.0):
+    def __init__(
+        self,
+        trafo3w_table: DataFrame,
+        bus_table: DataFrame,
+        tap_table: DataFrame,
+        trafo3w_model: str = "t",
+        sn_mva: float = 1.0,
+    ):
 
         super().__init__()
         self._hv_bus = trafo3w_table["hv_bus"].values
         self._mv_bus = trafo3w_table["mv_bus"].values
         self._lv_bus = trafo3w_table["lv_bus"].values
-        n_bus = len(bus_table)
-        self.voltages_hv = bus_table.loc[self._hv_bus, 'vn_kv']
-        self.voltages_mv = bus_table.loc[self._mv_bus, 'vn_kv']
-        self.voltages_lv = bus_table.loc[self._lv_bus, 'vn_kv']
+
+        self.voltages_hv = bus_table.loc[self._hv_bus, "vn_kv"]
+        self.voltages_mv = bus_table.loc[self._mv_bus, "vn_kv"]
+        self.voltages_lv = bus_table.loc[self._lv_bus, "vn_kv"]
 
         # Input Values
-        tap_pos = trafo3w_table["tap_pos"].fillna(0.).astype(int).values
+        tap_pos = trafo3w_table["tap_pos"].fillna(0.0).astype(int).values
         id_characteristic_table = trafo3w_table["id_characteristic_table"].astype(int).values
 
         i0_percent = trafo3w_table["i0_percent"].values
-        pfe_mw = trafo3w_table["pfe_kw"].values / 1000.
+        pfe_mw = trafo3w_table["pfe_kw"].values / 1000.0
 
         n = len(id_characteristic_table)
 
-        angle_deg = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "angle_deg"] for i in range(n)],
-                             dtype=float)
+        angle_deg = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "angle_deg"] for i in range(n)], dtype=float
+        )
         voltage_ratio = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "voltage_ratio"] for i in range(n)], dtype=float)
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "voltage_ratio"] for i in range(n)], dtype=float
+        )
 
-        vk_hv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_hv_percent"] for i in range(n)],
-                         dtype=float)
-        vkr_hv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_hv_percent"] for i in range(n)],
-                          dtype=float)
+        vk_hv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_hv_percent"] for i in range(n)], dtype=float
+        )
+        vkr_hv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_hv_percent"] for i in range(n)], dtype=float
+        )
 
-        vk_mv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_mv_percent"] for i in range(n)],
-                         dtype=float)
-        vkr_mv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_mv_percent"] for i in range(n)],
-                          dtype=float)
+        vk_mv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_mv_percent"] for i in range(n)], dtype=float
+        )
+        vkr_mv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_mv_percent"] for i in range(n)], dtype=float
+        )
 
-        vk_lv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_lv_percent"] for i in range(n)],
-                         dtype=float)
-        vkr_lv = np.array([tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_lv_percent"] for i in range(n)],
-                          dtype=float)
+        vk_lv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_lv_percent"] for i in range(n)], dtype=float
+        )
+        vkr_lv = np.array(
+            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_lv_percent"] for i in range(n)], dtype=float
+        )
 
-        shift_mv = trafo3w_table["shift_mv_degree"].fillna(0.).values
-        shift_lv = trafo3w_table["shift_lv_degree"].fillna(0.).values
+        shift_mv: NDArray = trafo3w_table["shift_mv_degree"].fillna(0.0).values
+        shift_lv: NDArray = trafo3w_table["shift_lv_degree"].fillna(0.0).values
         print(angle_deg.shape)
         if "tap_side" in trafo3w_table.columns:
             tap_side = trafo3w_table["tap_side"].fillna("hv").values
         else:
             tap_side = np.array(["hv"] * len(trafo3w_table), dtype=object)
 
-        theta_hv = np.zeros_like(angle_deg, dtype=float)  # hv-Referenz
-        theta_mv = shift_mv.astype(float)  # Grad
-        theta_lv = shift_lv.astype(float)  # Grad
+        theta_hv: NDArray = np.zeros_like(angle_deg, dtype=float)  # hv-Referenz
+        theta_mv: NDArray = shift_mv.astype(float)  # Grad
+        theta_lv: NDArray = shift_lv.astype(float)  # Grad
 
-        mag_hv = np.ones_like(voltage_ratio, dtype=float)
-        mag_mv = np.ones_like(voltage_ratio, dtype=float)
-        mag_lv = np.ones_like(voltage_ratio, dtype=float)
+        mag_hv: NDArray = np.ones_like(voltage_ratio, dtype=float)
+        mag_mv: NDArray = np.ones_like(voltage_ratio, dtype=float)
+        mag_lv: NDArray = np.ones_like(voltage_ratio, dtype=float)
 
         theta_hv = np.where(tap_side == "hv", theta_hv + angle_deg, theta_hv)
         mag_hv = np.where(tap_side == "hv", voltage_ratio, mag_hv)
@@ -92,37 +104,37 @@ class ThreeWindingTransformerModel(ThreePort):
 
         z_hv = vk_hv / 100 * (sn_mva / sn_hv)
         r_hv = vkr_hv / 100 * (sn_mva / sn_hv)
-        x_hv = np.sqrt(z_hv ** 2 - r_hv ** 2)
+        x_hv = np.sqrt(z_hv**2 - r_hv**2)
         z12 = r_hv + 1j * x_hv  # hv-mv
 
         z_mv = vk_mv / 100 * (sn_mva / sn_mv)
         r_mv = vkr_mv / 100 * (sn_mva / sn_mv)
-        x_mv = np.sqrt(z_mv ** 2 - r_mv ** 2)
+        x_mv = np.sqrt(z_mv**2 - r_mv**2)
         z23 = r_mv + 1j * x_mv  # mv-lv
 
         z_lv = vk_lv / 100 * (sn_mva / sn_lv)
         r_lv = vkr_lv / 100 * (sn_mva / sn_lv)
-        x_lv = np.sqrt(z_lv ** 2 - r_lv ** 2)
+        x_lv = np.sqrt(z_lv**2 - r_lv**2)
         z13 = r_lv + 1j * x_lv  # hv-lv
 
         # magnetising admittance
-        i_0 = i0_percent / 100. * sn_mva
+        i_0 = i0_percent / 100.0 * sn_mva
         # iron losses are the real part of the admittance
         g_m = pfe_mw / sn_mva
 
         # when i_0 is not set / or zero, we can just use zero as a value, since the sqrt would be nan
         b_m_squared = np.square(i_0) - np.square(pfe_mw)
         b_m = np.where(b_m_squared < 0, 0, np.sqrt(b_m_squared) / sn_mva)
-        y_ = (g_m - 1j * b_m)
+        y_ = g_m - 1j * b_m
 
         z1 = 0.5 * (z12 + z13 - z23)
         z2 = 0.5 * (z12 + z23 - z13)
         z3 = 0.5 * (z13 + z23 - z12)
-        zm = 1. / y_
+        zm = 1.0 / y_
 
-        if trafo3w_model == 't':
+        if trafo3w_model == "t":
             # if np.any(mask_y_): # case transformer with no losses
-            #TODO: no losses check if needed
+            # TODO: no losses check if needed
 
             K = z1 * z2 * z3 + zm * (z1 * z2 + z2 * z3 + z1 * z3)
             self._Y_11 = (z2 * z3 + zm * (z2 + z3)) * abs2_a / K
@@ -169,9 +181,9 @@ class ThreeWindingTransformerModel(ThreePort):
         b_dc = np.abs(b)
         c_dc = np.abs(c)
 
-        self._DC_Y_hh = Y_hh_dc0 / (a_dc ** 2)
-        self._DC_Y_mm = Y_mm_dc0 / (b_dc ** 2)
-        self._DC_Y_ll = Y_ll_dc0 / (c_dc ** 2)
+        self._DC_Y_hh = Y_hh_dc0 / (a_dc**2)
+        self._DC_Y_mm = Y_mm_dc0 / (b_dc**2)
+        self._DC_Y_ll = Y_ll_dc0 / (c_dc**2)
 
         self._DC_Y_hm = Y_hm_dc0 / (a_dc * b_dc)
         self._DC_Y_mh = Y_mh_dc0 / (a_dc * b_dc)

@@ -13,23 +13,29 @@ CPU path, so results match to solver tolerance.
 
 See solver_cpp.py for the pin-and-flag served-mask semantics (same here).
 """
+
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
 
-from p3s.timeseries import dc_initial_voltage
 from p3s.contingency.case_generator import (
-    ContingencyCaseGenerator,
     ContingencyBatch,
+    ContingencyCaseGenerator,
 )
 from p3s.contingency.solver_cpp import ContingencyResultTable
+from p3s.timeseries import dc_initial_voltage
 
 
-def solve_contingencies_cuda(net, reslack_islands: bool = False,
-                             tol: float = 1e-8, max_iter: int = 30,
-                             init: str = "dc",
-                             max_chunk: int | None = None,
-                             backend: str = "cudss") -> ContingencyResultTable:
+def solve_contingencies_cuda(
+    net,
+    reslack_islands: bool = False,
+    tol: float = 1e-8,
+    max_iter: int = 30,
+    init: str = "dc",
+    max_chunk: int | None = None,
+    backend: str = "cudss",
+) -> ContingencyResultTable:
     """Solve every N-1 contingency in ``net`` on the GPU polar batch path.
 
     Signature and semantics mirror ``solve_contingencies_cpp`` (minus ``n_threads``,
@@ -47,15 +53,21 @@ def solve_contingencies_cuda(net, reslack_islands: bool = False,
     if L == 0:
         empty2 = np.empty((n, 0))
         return ContingencyResultTable(
-            groups=[], V=empty2.astype(np.complex128), served=empty2.astype(bool),
-            converged=np.empty(0, bool), iterations=np.empty(0, int))
+            groups=[],
+            V=empty2.astype(np.complex128),
+            served=empty2.astype(bool),
+            converged=np.empty(0, bool),
+            iterations=np.empty(0, int),
+        )
 
     solver = PolarNewtonSolverCUDA(
-        batch.Yp, batch.Yj,
+        batch.Yp,
+        batch.Yj,
         np.ascontiguousarray(batch.Yx_base, dtype=np.complex128),
         np.ascontiguousarray(batch.pv, dtype=np.int32),
         np.ascontiguousarray(batch.pq, dtype=np.int32),
-        backend=backend)
+        backend=backend,
+    )
     # Cap the per-chunk batch at the GPU's RF-solve amortization sweet spot (memory permits
     # bigger, but past the sweet spot per-column cost rises; ~128 on the RTX A500). None =
     # memory-budget only, right for large GPUs.
@@ -72,11 +84,11 @@ def solve_contingencies_cuda(net, reslack_islands: bool = False,
     # Per-case COMPLEX Ybus values (nnz, L). The magnitude/angle conversion + transpose is
     # done ON THE GPU (solve_batch_contingency_cx -> yx_to_polar kernel), avoiding ~seconds
     # of single-threaded host np.abs/np.angle/.T on large nets.
-    Yx_mat = np.ascontiguousarray(batch.Yx_matrix, dtype=np.complex128)   # (nnz, L)
-    Sbus = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)
+    Yx_mat: NDArray = np.ascontiguousarray(batch.Yx_matrix, dtype=np.complex128)  # (nnz, L)
+    Sbus: NDArray = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)
 
-    V0 = np.empty((n, L), dtype=np.complex128)
-    pin = np.zeros((n, L), dtype=np.uint8)
+    V0: NDArray = np.empty((n, L), dtype=np.complex128)
+    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
     for c, case in enumerate(batch.cases):
         v0 = v_start.copy()
         for bus, _kind in case.pinned_refs:
@@ -88,17 +100,21 @@ def solve_contingencies_cuda(net, reslack_islands: bool = False,
         V0[:, c] = v0
 
     res = solver.solve_batch_contingency_cx(
-        Yx_mat, Sbus,
+        Yx_mat,
+        Sbus,
         np.ascontiguousarray(V0, dtype=np.complex128),
         np.ascontiguousarray(pin, dtype=np.uint8),
-        max_iter=max_iter, tol=tol,
+        max_iter=max_iter,
+        tol=tol,
     )
 
     V = res["V"].copy()  # (n, L)
     served = np.stack([c.served for c in batch.cases], axis=1)  # (n, L)
     V[~served] = np.nan
     return ContingencyResultTable(
-        groups=batch.groups, V=V, served=served,
+        groups=batch.groups,
+        V=V,
+        served=served,
         converged=np.asarray(res["converged"], dtype=bool),
         iterations=np.asarray(res["iterations"], dtype=int),
     )

@@ -2,14 +2,16 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from pandas import DataFrame
-import numpy as np
 import numba
+import numpy as np
+from numpy.typing import NDArray
+from pandas import DataFrame
+
 from p3s.models.TwoPort import TwoPort
 
 
 @numba.njit
-def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
+def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     """
     Compute the per‐phase π‐model of a line.
 
@@ -27,7 +29,7 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
     Ysh_half: complex array, half the shunt admittance per phase [S]
     """
     # Calculate scaling value, scale everything in p.u.
-    Z_N = (vn_kv ** 2) / sn_mva
+    Z_N = (vn_kv**2) / sn_mva
 
     # 1) Calculate B
     B = 2 * C * f_hz * np.pi * 1e-9 * Z_N
@@ -45,11 +47,11 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
     Y_ft = -Z_sr
     Y_tf = -Z_sr
 
-    return Y_ff, Y_ft, Y_tf, Y_tt, 1/x_s
+    return Y_ff, Y_ft, Y_tf, Y_tt, 1 / x_s
 
 
 @numba.njit
-def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
+def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     """
     Compute the per‐phase T‐model of a line.
 
@@ -67,14 +69,14 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
     Ysh_half: complex array, half the shunt admittance per phase [S]
     """
     # Calculate scaling value, scale everything in p.u.
-    Z_N = (vn_kv ** 2) / sn_mva
+    Z_N = (vn_kv**2) / sn_mva
 
     # 1) Calculate B
     B = 2 * C * f_hz * np.pi * 1e-9 * Z_N
 
     # 2) Calculate Z Series impedance, everything needs to be scaled to p.u.
-    x_s = 1j * X  * length / Z_N
-    Z_sr = 1 / (R  * length / Z_N + x_s) / parallel
+    x_s = 1j * X * length / Z_N
+    Z_sr = 1 / (R * length / Z_N + x_s) / parallel
 
     # 3) Total shunt admittance, split equally at both ends
     Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
@@ -91,10 +93,10 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50., sn_mva=1.):
     # Calculate admittances
     Y_ff = a1 - a1 * a1 / D
     Y_tt = a2 - a2 * a2 / D
-    Y_ft = - (a1 * a2) / D
+    Y_ft = -(a1 * a2) / D
     Y_tf = Y_ft
 
-    return Y_ff, Y_ft, Y_tf, Y_tt, 1/x_s
+    return Y_ff, Y_ft, Y_tf, Y_tt, 1 / x_s
 
 
 class TransmissionLineModel(TwoPort):
@@ -112,8 +114,9 @@ class TransmissionLineModel(TwoPort):
         ---                        ---
 
     """
+
     # @numba.njit
-    def __init__(self, line_table: DataFrame, voltages: np.ndarray, f_hz: float = 50.0, sn_mva: float = 1.0):
+    def __init__(self, line_table: DataFrame, voltages: NDArray, f_hz: float = 50.0, sn_mva: float = 1.0):
         super().__init__()
         self._from_bus = line_table["from_bus"].values
         self._to_bus = line_table["to_bus"].values
@@ -142,7 +145,7 @@ class TransmissionLineModel(TwoPort):
         )
 
         # for DC powerflow
-        self._DC_Yff = self._DC_Ytt = - one_over_x
+        self._DC_Yff = self._DC_Ytt = -one_over_x
         self._DC_Yft = self._DC_Ytf = one_over_x
 
         # Zero out de-energised lines. An out-of-service line carries no current and must
