@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# This workflow builds the documentation
+
+name: docs
+on:
+  push
+
+jobs:
+  docs_check:
+    name: Sphinx Docs Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Sphinx build
+        uses: ammaraskar/sphinx-action@54e52bfb642e9b60ea5b6bcb05fe3f74b40d290a #8.2.3
+        with:
+          pre-build-command: >-
+            python -m pip install uv &&
+            uv pip install --system --link-mode copy ".[docs]"
+          build-command: sphinx-build -b html . _build -W
+          docs-folder: docs

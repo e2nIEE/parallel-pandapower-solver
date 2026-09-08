@@ -17,7 +17,32 @@ CPU / GPU based AC/DC Powerflow solver
 
 ## Features
 
-* TODO
+### Solvers
+- C++ Newton-Raphson with KLU, single and multi-threaded (using openMP)
+- GPU-resident polar Newton solver (cuDSS, cuSolverRF and cuSolverSp QR)
+- reference python / numba implementation
+
+### Study opportunities
+- batched timeseries calculation
+- N-1 contingency analysis with islanding detection (including a "reslack" feature)
+- station controllers solved inside the Newton Raphson (still under review)
+
+### Robustness
+- Armijo damped Newton-Raphson
+- DC power-flow initialisation with flat start fallback
+- voltage-band plausibility check against non-physical roots
+- per-case convergence and per-bus served masks
+
+### Integration
+- operates directly on pandapower networks (standalone)
+- zero-copy numpy interface, using pybind11, no per-call marshalling
+- Linux and Windows native builds; pip installable
+- Will be directly integrated in pandapower
+
+### Verification
+- all results are verified against pandapower
+- test pipeline automatically tests every change
+- accuracy is 1e-11 vs pandapower
 
 ## Installation
 
@@ -39,3 +64,9 @@ Look into docs/installation.md for more details.
 ## Credits
 
 This package was created with [Cookiecutter](https://github.com/audreyfeldroy/cookiecutter) and the [audreyfeldroy/cookiecutter-pypackage](https://github.com/audreyfeldroy/cookiecutter-pypackage) project template.
+
+
+---
+
+The software in this Github project only contains calls to NVIDIA software already installed by the user (e.g. CUDA);
+this software must be obtained and licensed separately and independently by the user.
