@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import numpy as np
+
 # from numba import jit
 from numpy.typing import NDArray
 from scipy.sparse import coo_matrix as sparse
