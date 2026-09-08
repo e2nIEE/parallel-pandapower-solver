@@ -57,7 +57,7 @@ pip install .[cpp]                # from a checkout (see note below)
 From a source checkout, p3s-cpp is not on an index, so build it explicitly:
   pip install ./p3s/cpp
 (SuiteSparse must be available, e.g. `conda install -c conda-forge suitesparse`.)
-(cuda-toolkit must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
+(cuda-toolkit[^1] must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
 
 Look into docs/installation.md for more details.
 
@@ -68,5 +68,5 @@ This package was created with [Cookiecutter](https://github.com/audreyfeldroy/co
 
 ---
 
-The software in this Github project only contains calls to NVIDIA software already installed by the user (e.g. CUDA);
-this software must be obtained and licensed separately and independently by the user.
+
+[^1]: CUDA libraries are not part of this repository and must be acquired separately from NVIDIA, under their respective license terms.
