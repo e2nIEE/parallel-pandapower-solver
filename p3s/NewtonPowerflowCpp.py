@@ -146,8 +146,8 @@ class NewtonPowerflow:
 
         # all buses are pq buses by default
         pq = self._lookup.values
-        pv = np.array(shape=0, dtype=int)
-        ref = np.array(shape=0, dtype=int)
+        pv = np.ndarray(shape=0, dtype=int)
+        ref = np.ndarray(shape=0, dtype=int)
 
         if "load" in net and len(net["load"]) > 0:
             net.load["_lookup"] = self._lookup[net.load.bus].values.astype(int)

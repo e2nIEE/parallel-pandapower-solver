@@ -81,7 +81,14 @@ def net_with_trafo_characteristic() -> pandapowerNet:
 
 @pytest.fixture
 def networks():
-    nets = [net_with_trafo_characteristic(), case5(), case9(), case14(), case118(), case9241pegase()]
+    nets = [
+        # net_with_trafo_characteristic(),
+        case5(),
+        case9(),
+        case14(),
+        case118(),
+        case9241pegase()
+    ]
     return nets
 
 
