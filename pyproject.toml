@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p3s"
-version = "1.0.0"
+version = "1.0.1"
 description = "CPU / GPU based AC/DC Powerflow solver"
 readme = "README.md"
 authors = [
