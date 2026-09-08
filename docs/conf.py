@@ -5,6 +5,13 @@
 import os
 import sys
 
+# The version info for the project you're documenting, acts as replacement for
+# |version| and |release|, also used in various other places throughout the
+# built documents.
+#
+# The full version, including alpha/beta/rc tags.
+from importlib.metadata import version as metaversion
+
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
@@ -44,14 +51,8 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'parallel pandapower solver'
-copyright = u'2026 by Fraunhofer IEE'
+copyright = '2026 by Fraunhofer IEE'
 
-# The version info for the project you're documenting, acts as replacement for
-# |version| and |release|, also used in various other places throughout the
-# built documents.
-#
-# The full version, including alpha/beta/rc tags.
-from importlib.metadata import version as metaversion
 release = metaversion('p3s')
 # The short X.Y version. for example take major/minor
 version = '.'.join(release.split('.')[:2])

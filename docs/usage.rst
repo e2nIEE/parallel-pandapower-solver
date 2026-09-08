@@ -40,7 +40,7 @@ with the default :code:`inplace=False` it is returned instead. Call this before 
 the solvers below for networks that contain trafos.
 
 Newton-Raphson solver (:code:`p3s.NewtonPowerflow`)
-=============================================
+===================================================
 
 The general AC power-flow solver for transmission networks, PV/generator buses
 and trafos. This is the pure-Python implementation (NumPy/SciPy).
@@ -68,7 +68,7 @@ arguments are passed through to :code:`scipy.sparse.linalg.spsolve`.
 The number of iterations taken is stored in :code:`net["_ppc"]["iterations"]`.
 
 C++ / KLU accelerated solver (:code:`p3s.NewtonPowerflowCpp`)
-=======================================================
+=============================================================
 
 A drop-in accelerated variant of the Newton solver that offloads the sparse
 factorisation to the compiled `nr_klu` extension. It is opt-in because building it
@@ -106,7 +106,7 @@ factorisation across the whole batch:
 thread. See [Time-series data](#time-series-data) for the `timeseries` format.
 
 GPU solver (:code:`p3s.cuda.NewtonPowerflowCUDA`)
-===========================================
+=================================================
 
 A CUDA-accelerated Newton solver. Batched solves run fully on the GPU:
 
@@ -145,7 +145,7 @@ and `q_mvar`. Column `t` of every array is applied as the set-points for time st
 `extract_timeseries` (see `tests/get_load_gen_matrix.py`).
 
 N-1 contingency analysis (:code:`p3s.contingency`)
-============================================
+==================================================
 
 Batch analysis of single-element contingencies (N-1). Every line and transformer
 belonging to an `outage_group` is removed one group at a time and the resulting
