@@ -65,8 +65,5 @@ Look into docs/installation.md for more details.
 
 This package was created with [Cookiecutter](https://github.com/audreyfeldroy/cookiecutter) and the [audreyfeldroy/cookiecutter-pypackage](https://github.com/audreyfeldroy/cookiecutter-pypackage) project template.
 
-
 ---
-
-
 [^1]: CUDA libraries are not part of this repository and must be acquired separately from NVIDIA, under their respective license terms.
