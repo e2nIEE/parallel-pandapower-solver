@@ -15,7 +15,7 @@ After a successful build, the module is installed **into the `p3s` package** by
 CMake, so it resolves without any path juggling:
 
 ```python
-from p3s import nr_klu      # installed build
+from p3s import nr_klu  # installed build
 # fallback: from p3s.cpp import nr_klu
 ```
 

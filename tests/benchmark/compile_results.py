@@ -17,7 +17,8 @@ Usage:
         python compile_results.py --method gpu
         python compile_results.py --include-partial --include-error-unknown
         python compile_results.py --use-global-extrema
-    """
+"""
+
 import argparse
 import json
 import sys
@@ -26,24 +27,19 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-
-from benchmark_batched import (
-    BenchmarkResults,
-    MethodResults
-)
+from benchmark_batched import BenchmarkResults, MethodResults
 
 COLORS = [
-    ( 57/256,  55/256, 139/256),  # fh-8
-    (226/256,   0/256,  26/256),  # fh-10
-    (143/256, 164/256,   2/256),  # fh-24
-    ( 37/256, 186/256, 226/256),  # fh-34
-    (253/256, 195/256,   0/256),  # fh-20
-    (235/256, 106/256,  10/256),  # fh-16
+    (57 / 256, 55 / 256, 139 / 256),  # fh-8
+    (226 / 256, 0 / 256, 26 / 256),  # fh-10
+    (143 / 256, 164 / 256, 2 / 256),  # fh-24
+    (37 / 256, 186 / 256, 226 / 256),  # fh-34
+    (253 / 256, 195 / 256, 0 / 256),  # fh-20
+    (235 / 256, 106 / 256, 10 / 256),  # fh-16
 ]
 
-def method_results_compare(
-    m1: MethodResults, m2: MethodResults, ts1: str, ts2: str
-) -> MethodResults:
+
+def method_results_compare(m1: MethodResults, m2: MethodResults, ts1: str, ts2: str) -> MethodResults:
     """Compare two MethodResults and return the preferred one.
 
     Priority:
@@ -75,7 +71,7 @@ def method_results_compare(
 
     if len(time1) == len(time2):
         match = True
-        for t1, t2 in zip(time1, time2):
+        for t1, t2 in zip(time1, time2, strict=False):
             if not (np.isnan(t1) and np.isnan(t2)):
                 if abs(t1 - t2) > 1e-6:
                     match = False
@@ -84,7 +80,7 @@ def method_results_compare(
             max_err1 = m1.get("max_vm_error", [])
             max_err2 = m2.get("max_vm_error", [])
             if len(max_err1) == len(max_err2):
-                for e1, e2 in zip(max_err1, max_err2):
+                for e1, e2 in zip(max_err1, max_err2, strict=False):
                     if e1 is not None and e2 is not None:
                         if abs(e1 - e2) > 1e-6:
                             match = False
@@ -115,7 +111,7 @@ def find_result_files(output_dir):
 
 def load_result_file(filepath) -> BenchmarkResults:
     """Load a single result JSON file."""
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         return json.load(f)
 
 
@@ -145,9 +141,7 @@ def combine_benchmark_results(
 
     for (case, t_values), group in groups.items():
         newest_ts = max(r["timestamp"] for r in group)
-        newest_job_id = next(
-            r["job_id"] for r in group if r["timestamp"] == newest_ts
-        )
+        newest_job_id = next(r["job_id"] for r in group if r["timestamp"] == newest_ts)
         bus_count = group[0]["bus_count"]  # should be identical for all BenchmarkResults where case is identical
 
         combined_methods: dict = {}
@@ -158,9 +152,7 @@ def combine_benchmark_results(
                     combined_methods[method] = (method_results, result["timestamp"])
                 else:
                     existing, existing_ts = combined_methods[method]
-                    better = method_results_compare(
-                        existing, method_results, existing_ts, result["timestamp"]
-                    )
+                    better = method_results_compare(existing, method_results, existing_ts, result["timestamp"])
                     combined_methods[method] = (better, result["timestamp"])
 
         combined_result: BenchmarkResults = BenchmarkResults(
@@ -183,7 +175,7 @@ def generate_time_vs_timesteps_graph(
     include_error_unknown=False,
     include_fail=False,
     include_not_available=False,
-    use_global_extrema=False
+    use_global_extrema=False,
 ) -> None:
     """Generate time vs timesteps graph for all methods on single graph.
 
@@ -210,7 +202,7 @@ def generate_time_vs_timesteps_graph(
     plt.rcParams["legend.fontsize"] = 24
 
     methods_in_data: set[str] = set()
-    for case, result in combined_results.items():
+    for _, result in combined_results.items():
         methods_in_data.update(result["methods"].keys())
 
     color_map = {}
@@ -344,7 +336,7 @@ def generate_time_vs_timesteps_graph(
                 marker="o",
                 color=color,
                 linestyle="--",
-                label=f'{method} ({best_case[4:]})',
+                label=f"{method} ({best_case[4:]})",
             )
             all_times.extend(best_data["time_min"])
 
@@ -355,7 +347,7 @@ def generate_time_vs_timesteps_graph(
                 marker="o",
                 color=color,
                 linestyle="-",
-                label=f'{method} ({worst_case[4:]})',
+                label=f"{method} ({worst_case[4:]})",
             )
             all_times.extend(worst_data["time_min"])
 
@@ -368,6 +360,7 @@ def generate_time_vs_timesteps_graph(
         max_time = max(all_times)
 
         import math
+
         min_exp = math.floor(math.log10(min_time))
         max_exp = math.ceil(math.log10(max_time))
 
@@ -375,7 +368,7 @@ def generate_time_vs_timesteps_graph(
         y_tick_labels = []
 
         for exp in range(int(min_exp), int(max_exp) + 1):
-            base = 10 ** exp
+            base = 10**exp
             for mult in [2, 5]:
                 val = base * mult
                 if val >= min_time and val <= max_time:
@@ -383,7 +376,7 @@ def generate_time_vs_timesteps_graph(
                     if val >= 1:
                         y_tick_labels.append(f"{val:.0f}s")
                     else:
-                        y_tick_labels.append(f"{val*1000:.0f}ms")
+                        y_tick_labels.append(f"{val * 1000:.0f}ms")
 
     plt.xlabel("timesteps")
     plt.ylabel("time (s)")
@@ -407,7 +400,7 @@ def generate_time_vs_bus_graph(
     include_partial=False,
     include_error_unknown=False,
     include_fail=False,
-    include_not_available=False
+    include_not_available=False,
 ) -> None:
     """Generate time vs bus count graphs.
 
@@ -485,9 +478,7 @@ def generate_time_vs_bus_graph(
                         continue
                     method_data_by_case[case] = time_val / 1000
 
-            sorted_cases = sorted(
-                method_data_by_case.keys(), key=lambda c: bus_counts.get(c, 0)
-            )
+            sorted_cases = sorted(method_data_by_case.keys(), key=lambda c: bus_counts.get(c, 0))
 
             bus_list = [bus_counts.get(c, 0) for c in sorted_cases]
             time_list = [method_data_by_case[c] for c in sorted_cases]
@@ -512,7 +503,7 @@ def generate_time_vs_bus_graph(
         case_bus_counts = sorted({bus_counts[c] for c in case_bus_list})
         purged_bus_counts = [case_bus_counts[0]]
         for c in case_bus_counts[1:]:  # remove any ticks that are closer than 5 together.
-            if c - purged_bus_counts[-1] >= int(c*0.25):
+            if c - purged_bus_counts[-1] >= int(c * 0.25):
                 purged_bus_counts.append(c)
         plt.xticks(purged_bus_counts, purged_bus_counts, rotation=45)
 
@@ -546,6 +537,7 @@ def generate_time_vs_bus_graph(
             max_time = max(all_times_bus)
 
             import math
+
             min_exp = math.floor(math.log10(min_time))
             max_exp = math.ceil(math.log10(max_time))
 
@@ -553,7 +545,7 @@ def generate_time_vs_bus_graph(
             y_tick_labels = []
 
             for exp in range(int(min_exp), int(max_exp) + 1):
-                base = 10 ** exp
+                base = 10**exp
                 for mult in [2, 5]:
                     val = base * mult
                     if val >= min_time and val <= max_time:
@@ -561,7 +553,7 @@ def generate_time_vs_bus_graph(
                         if val >= 1:
                             y_tick_labels.append(f"{val:.0f}s")
                         else:
-                            y_tick_labels.append(f"{val*1000:.0f}ms")
+                            y_tick_labels.append(f"{val * 1000:.0f}ms")
 
             plt.yticks(y_ticks, y_tick_labels)
 
@@ -575,7 +567,16 @@ def generate_time_vs_bus_graph(
         plt.close()
 
 
-def compile_results(output_dir, method_filter=None, generate_graphs=True, include_partial=False, include_error_unknown=False, include_fail=False, include_not_available=False, use_global_extrema=False):
+def compile_results(
+    output_dir,
+    method_filter=None,
+    generate_graphs=True,
+    include_partial=False,
+    include_error_unknown=False,
+    include_fail=False,
+    include_not_available=False,
+    use_global_extrema=False,
+):
     """Compile all results into a pandas DataFrame.
 
     Args:
@@ -613,8 +614,23 @@ def compile_results(output_dir, method_filter=None, generate_graphs=True, includ
 
     if generate_graphs:
         print("\nGenerating graphs...")
-        generate_time_vs_timesteps_graph(combined, output_dir, include_partial=include_partial, include_error_unknown=include_error_unknown, include_fail=include_fail, include_not_available=include_not_available, use_global_extrema=use_global_extrema)
-        generate_time_vs_bus_graph(combined, output_dir, include_partial=include_partial, include_error_unknown=include_error_unknown, include_fail=include_fail, include_not_available=include_not_available)
+        generate_time_vs_timesteps_graph(
+            combined,
+            output_dir,
+            include_partial=include_partial,
+            include_error_unknown=include_error_unknown,
+            include_fail=include_fail,
+            include_not_available=include_not_available,
+            use_global_extrema=use_global_extrema,
+        )
+        generate_time_vs_bus_graph(
+            combined,
+            output_dir,
+            include_partial=include_partial,
+            include_error_unknown=include_error_unknown,
+            include_fail=include_fail,
+            include_not_available=include_not_available,
+        )
         print(f"Graphs saved to: {output_dir}")
 
     return combined

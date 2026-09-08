@@ -13,24 +13,23 @@ for CI, so we test a representative subset; the small-net fixtures cover the
 islanding / parallel-branch / re-slacking edge cases exhaustively. Full tests were performed
 during development, and showed the same results.
 """
+
 import copy
 import time
 
 import numpy as np
 import pytest
+from pandapower.networks import case9241pegase
+
+from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.contingency.ground_truth import enumerate_contingencies, solve_contingency
+from p3s.contingency.solver_cpp import solve_contingencies_cpp
+from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp
 
 pp = pytest.importorskip("pandapower")
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
 if not hasattr(nr_klu.Solver, "solve_batch_contingency"):
-    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)",
-                allow_module_level=True)
-
-from pandapower.networks import case9241pegase
-
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
-from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp
-from p3s.contingency.solver_cpp import solve_contingencies_cpp
-from p3s.contingency.ground_truth import solve_contingency, enumerate_contingencies
+    pytest.skip("nr_klu lacks solve_batch_contingency (rebuild ./p3s/cpp)", allow_module_level=True)
 
 # Representative contingencies: the first few lines (each its own group) + one transformer.
 N_LINE_CONTINGENCIES = 4
@@ -66,12 +65,10 @@ def test_pegase_n_minus_1_matches_pandapower(pegase_net, base_accuracy):
     vm_tol = base_vm_err + 1e-5
     va_tol = base_va_err + 1e-3
 
-    res = solve_contingencies_cpp(pegase_net, reslack_islands=False,
-                                  n_threads=0, init="flat")
+    res = solve_contingencies_cpp(pegase_net, reslack_islands=False, n_threads=0, init="flat")
     assert res.groups == enumerate_contingencies(pegase_net)
-    assert len(res.groups) == N_LINE_CONTINGENCIES + 1   # lines + one trafo
+    assert len(res.groups) == N_LINE_CONTINGENCIES + 1  # lines + one trafo
 
-    n_bus = len(pegase_net.bus)
     for c, g in enumerate(res.groups):
         gt = solve_contingency(pegase_net, g, reslack_islands=False)
         assert gt.converged, f"{g}: pandapower reference did not converge"
@@ -89,8 +86,7 @@ def test_pegase_n_minus_1_matches_pandapower(pegase_net, base_accuracy):
 
 def test_pegase_shares_one_symbolic_factorization(pegase_net):
     """All pegase contingencies solve in one batch (shared pattern) and converge."""
-    res = solve_contingencies_cpp(pegase_net, reslack_islands=False,
-                                  n_threads=0, init="flat")
+    res = solve_contingencies_cpp(pegase_net, reslack_islands=False, n_threads=0, init="flat")
     assert res.converged.all()
     assert res.V.shape == (len(pegase_net.bus), len(res.groups))
     # every bus served (these contingencies do not island the meshed transmission net)
@@ -163,4 +159,5 @@ def test_pegase_speedup_vs_pandapower(pegase_bench_net):
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v", "-s"]))

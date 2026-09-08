@@ -44,29 +44,28 @@ The Jacobian layout (unknowns `x = [Δθ(pvpq); ΔVm(pq)]`):
 ## Python API
 
 ```python
-import nr_klu            # standalone (this dir on sys.path)
+import nr_klu  # standalone (this dir on sys.path)
 # or:  from p3s import nr_klu
 
 # --- stateful (recommended for many profiles on one topology) ---
-s = nr_klu.Solver(Yp, Yj, Yx, pv, pq)      # KLU analyze done ONCE here
+s = nr_klu.Solver(Yp, Yj, Yx, pv, pq)  # KLU analyze done ONCE here
 r = s.solve(Sbus, V0, max_iter=30, tol=1e-8)
-V          = r["V"]            # complex128 converged bus voltages
-iters      = r["iterations"]
-converged  = r["converged"]
-s.update_Y(Yx_new)            # refresh Ybus values without re-analyzing
+V = r["V"]  # complex128 converged bus voltages
+iters = r["iterations"]
+converged = r["converged"]
+s.update_Y(Yx_new)  # refresh Ybus values without re-analyzing
 
 # --- batched / time-series: many operating points on ONE topology ---
 # Sbus is (n, T) complex128; V0 is (n, T) per-column or (n,) broadcast. Each column is
 # an independent Newton solve sharing the single KLU symbolic analyze.
 rb = s.solve_batch(Sbus_mat, V0, max_iter=30, tol=1e-8, n_threads=0)
-Vb         = rb["V"]            # complex128 (n, T)
-iters      = rb["iterations"]   # int32  (T,)
-converged  = rb["converged"]    # bool   (T,)
+Vb = rb["V"]  # complex128 (n, T)
+iters = rb["iterations"]  # int32  (T,)
+converged = rb["converged"]  # bool   (T,)
 # n_threads: 0 = all CPU cores (OpenMP), 1 = serial. Results are thread-invariant.
 
 # --- stateless one-shot (analyze + factor every call) ---
-r = nr_klu.solve_single(Yp, Yj, Yx, Sbus, V0, pv, pq,
-                        max_iter=30, tol=1e-8, ordering=0, btf=0)
+r = nr_klu.solve_single(Yp, Yj, Yx, Sbus, V0, pv, pq, max_iter=30, tol=1e-8, ordering=0, btf=0)
 # stateless result additionally reports timing: t_setup_ms, t_solve_ms.
 ```
 

@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+name: testing
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev
+      - run: pip install ./p3s/cpp
+      - run: pip install .[test]
+      - run: pytest --ignore="./tests/cuda" --timeout=900 "./tests"

@@ -16,10 +16,12 @@ drivers share one validated implementation. The functions are duck-typed on a
 ``NewtonPowerflow``-like object (any object exposing ``_sBus``, ``_Bbus``, ``_p_shift``,
 ``busses``, ``_initial_voltage`` and ``_pre_dc_solve``); both solver classes qualify.
 """
-import sys
+
 import logging
+import sys
 
 import numpy as np
+from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 _TS_ELEMENTS = ("load", "sgen", "gen")
 
 
-def build_sbus_matrix(pf, net, timeseries) -> np.ndarray:
+def build_sbus_matrix(pf, net, timeseries) -> NDArray:
     """Per-bus, per-timestep complex injection matrix ``Sbus`` of shape ``(n_bus, T)``.
 
     Starts from the static base injection ``pf._sBus`` (which already contains
@@ -62,7 +64,7 @@ def build_sbus_matrix(pf, net, timeseries) -> np.ndarray:
         base_q = net[element].q_mvar.to_numpy() if "q_mvar" in net[element] else np.zeros_like(base_p)
 
         if (element, "p_mw") in timeseries:
-            dP = timeseries[(element, "p_mw")] - base_p[:, None]      # (n_el, T)
+            dP = timeseries[(element, "p_mw")] - base_p[:, None]  # (n_el, T)
             np.add.at(sbus_matrix, lookup, (-sign * dP / sn).astype(np.complex128))
         if (element, "q_mvar") in timeseries:
             dQ = timeseries[(element, "q_mvar")] - base_q[:, None]
@@ -80,7 +82,7 @@ def build_sbus_matrix(pf, net, timeseries) -> np.ndarray:
 _DC_ANGLE_SANITY_DEG = 120.0
 
 
-def dc_initial_voltage(pf) -> np.ndarray:
+def dc_initial_voltage(pf) -> NDArray:
     """DC-power-flow-initialised start voltage (one vector, reused for all steps).
 
     Mirrors the CPU ``calculate(init='dc')`` path. The DC solve seeds bus angles so
@@ -104,8 +106,11 @@ def dc_initial_voltage(pf) -> np.ndarray:
     # which double-.imag'd to zeros -> singular -> flat start). See NewtonPowerflowCpp
     # for the full bug note.
     voltage[pvpq] = pf._pre_dc_solve(
-        yBus=pf._Bbus, voltage=voltage, Pinj=pf._sBus.real + pf._p_shift,
-        ref=pf.busses["ref"], pvpq=pvpq,
+        yBus=pf._Bbus,
+        voltage=voltage,
+        Pinj=pf._sBus.real + pf._p_shift,
+        ref=pf.busses["ref"],
+        pvpq=pvpq,
     )
     if len(pv) > 0:
         voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))

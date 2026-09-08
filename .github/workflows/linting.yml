@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Fraunhofer IEE
 #
 # SPDX-License-Identifier: BSD-3-Clause
-name: reuse
+name: linting
 
 on:
   pull_request:
@@ -10,11 +10,14 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history needed so `--base` can diff against it
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install reuse
+      - run: pip install .[test]
+      - run: pip install reuse ruff mypy
       - run: reuse lint
+      - run: ruff check
+      - run: mypy

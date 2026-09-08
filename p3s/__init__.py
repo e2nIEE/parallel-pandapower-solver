@@ -5,4 +5,4 @@
 """Top-level package for p3s."""
 
 __author__ = """Mike Vogt"""
-__email__ = 'mike.vogt@iee.fraunhofer.de'
+__email__ = "mike.vogt@iee.fraunhofer.de"

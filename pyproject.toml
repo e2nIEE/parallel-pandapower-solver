@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p3s"
-version = "1.0.0"
+version = "1.0.1"
 description = "CPU / GPU based AC/DC Powerflow solver"
 readme = "README.md"
 authors = [
@@ -44,15 +44,25 @@ dependencies = [
     "intel-cmplr-lib-rt",
     "numba"
 ]
-requires-python = ">= 3.11"
+requires-python = ">= 3.12"
 
 [project.optional-dependencies]
+docs = [
+    "numpydoc",
+    "sphinx",
+    "sphinx_rtd_theme",
+    "sphinx-pyproject",
+    "sphinxcontrib-imagesvg",
+]
 test = [
     "coverage",  # testing
     "pytest",  # testing
+    "pytest-timeout", # for timeout
     "ruff",  # linting
     "ty", # checking types
     "ipdb", # debugging
+    "pandas-stubs", # linting
+    "mypy" # linting
 ]
 # Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because it
 # needs a C++17 compiler and SuiteSparse/KLU at build time. Installs the separate

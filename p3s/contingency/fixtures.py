@@ -28,13 +28,13 @@ The standard pandapower ``in_service`` flag is the mechanism for taking a branch
 out, so the pandapower ground-truth oracle (``ground_truth.py``) needs no special
 handling -- it just flips ``in_service`` and runs ``runpp``.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandapower as pp
 
 from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
-
 
 # Generator short-circuit columns required for the optional island re-slacking
 # (lowest-Z generator becomes the island reference). Populated only where a fixture
@@ -76,8 +76,7 @@ def radial_spur():
     pp.create_ext_grid(net, b[0], vm_pu=1.02, va_degree=0.0)
 
     # meshed core: 0-1, 1-2, 0-2
-    lp = dict(length_km=1.0, r_ohm_per_km=0.08, x_ohm_per_km=0.32,
-              c_nf_per_km=12.0, max_i_ka=1.0)
+    lp = {"length_km": 1.0, "r_ohm_per_km": 0.08, "x_ohm_per_km": 0.32, "c_nf_per_km": 12.0, "max_i_ka": 1.0}
     l01 = pp.create_line_from_parameters(net, b[0], b[1], **lp)
     pp.create_line_from_parameters(net, b[1], b[2], **lp)
     pp.create_line_from_parameters(net, b[0], b[2], **lp)
@@ -90,8 +89,8 @@ def radial_spur():
     pp.create_load(net, b[4], p_mw=3.0, q_mvar=0.5)
 
     _add_outage_group_columns(net)
-    net.line.loc[l_spur, "outage_group"] = "spur"   # outage islands b3 AND b4
-    net.line.loc[l01, "outage_group"] = "core"      # outage islands nothing
+    net.line.loc[l_spur, "outage_group"] = "spur"  # outage islands b3 AND b4
+    net.line.loc[l01, "outage_group"] = "core"  # outage islands nothing
     return net
 
 
@@ -106,12 +105,11 @@ def parallel_branch():
     b = [pp.create_bus(net, vn_kv=110.0, name=f"b{i}") for i in range(3)]
     pp.create_ext_grid(net, b[0], vm_pu=1.0, va_degree=0.0)
 
-    lp = dict(length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.3,
-              c_nf_per_km=10.0, max_i_ka=1.0)
+    lp = {"length_km": 1.0, "r_ohm_per_km": 0.1, "x_ohm_per_km": 0.3, "c_nf_per_km": 10.0, "max_i_ka": 1.0}
     la = pp.create_line_from_parameters(net, b[0], b[1], **lp)
-    pp.create_line_from_parameters(net, b[0], b[1], **lp)   # parallel to la
+    pp.create_line_from_parameters(net, b[0], b[1], **lp)  # parallel to la
     pp.create_line_from_parameters(net, b[1], b[2], **lp)
-    pp.create_line_from_parameters(net, b[0], b[2], **lp)   # alt path keeps b1 fed
+    pp.create_line_from_parameters(net, b[0], b[2], **lp)  # alt path keeps b1 fed
 
     pp.create_load(net, b[1], p_mw=10.0, q_mvar=3.0)
     pp.create_load(net, b[2], p_mw=6.0, q_mvar=1.5)
@@ -129,8 +127,7 @@ def parallel_branch_both():
     b = [pp.create_bus(net, vn_kv=110.0, name=f"b{i}") for i in range(3)]
     pp.create_ext_grid(net, b[0], vm_pu=1.0, va_degree=0.0)
 
-    lp = dict(length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.3,
-              c_nf_per_km=10.0, max_i_ka=1.0)
+    lp = {"length_km": 1.0, "r_ohm_per_km": 0.1, "x_ohm_per_km": 0.3, "c_nf_per_km": 10.0, "max_i_ka": 1.0}
     la = pp.create_line_from_parameters(net, b[0], b[1], **lp)
     lb = pp.create_line_from_parameters(net, b[0], b[1], **lp)
     pp.create_line_from_parameters(net, b[1], b[2], **lp)
@@ -158,20 +155,49 @@ def tapped_trafo():
     pp.create_ext_grid(net, bhv, vm_pu=1.03, va_degree=0.0)
 
     t = pp.create_transformer_from_parameters(
-        net, hv_bus=bhv, lv_bus=blv, sn_mva=40.0, vn_hv_kv=110.0, vn_lv_kv=20.0,
-        vk_percent=12.0, vkr_percent=0.5, pfe_kw=30.0, i0_percent=0.1,
-        shift_degree=30.0, tap_side="hv", tap_neutral=0, tap_min=-9, tap_max=9,
-        tap_step_percent=1.5, tap_step_degree=0.0, tap_pos=3,
+        net,
+        hv_bus=bhv,
+        lv_bus=blv,
+        sn_mva=40.0,
+        vn_hv_kv=110.0,
+        vn_lv_kv=20.0,
+        vk_percent=12.0,
+        vkr_percent=0.5,
+        pfe_kw=30.0,
+        i0_percent=0.1,
+        shift_degree=30.0,
+        tap_side="hv",
+        tap_neutral=0,
+        tap_min=-9,
+        tap_max=9,
+        tap_step_percent=1.5,
+        tap_step_degree=0.0,
+        tap_pos=3,
     )
     # second trafo keeps lv fed when the first is out (avoid islanding here)
     pp.create_transformer_from_parameters(
-        net, hv_bus=bhv, lv_bus=blv, sn_mva=40.0, vn_hv_kv=110.0, vn_lv_kv=20.0,
-        vk_percent=12.0, vkr_percent=0.5, pfe_kw=30.0, i0_percent=0.1,
-        shift_degree=30.0, tap_side="hv", tap_neutral=0, tap_min=-9, tap_max=9,
-        tap_step_percent=1.5, tap_step_degree=0.0, tap_pos=0,
+        net,
+        hv_bus=bhv,
+        lv_bus=blv,
+        sn_mva=40.0,
+        vn_hv_kv=110.0,
+        vn_lv_kv=20.0,
+        vk_percent=12.0,
+        vkr_percent=0.5,
+        pfe_kw=30.0,
+        i0_percent=0.1,
+        shift_degree=30.0,
+        tap_side="hv",
+        tap_neutral=0,
+        tap_min=-9,
+        tap_max=9,
+        tap_step_percent=1.5,
+        tap_step_degree=0.0,
+        tap_pos=0,
     )
-    pp.create_line_from_parameters(net, blv, blv2, length_km=1.0, r_ohm_per_km=0.1,
-                                   x_ohm_per_km=0.3, c_nf_per_km=10.0, max_i_ka=1.0)
+    pp.create_line_from_parameters(
+        net, blv, blv2, length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.3, c_nf_per_km=10.0, max_i_ka=1.0
+    )
     pp.create_load(net, blv, p_mw=12.0, q_mvar=4.0)
     pp.create_load(net, blv2, p_mw=8.0, q_mvar=2.0)
 
@@ -207,10 +233,9 @@ def generator_island():
     g1 = pp.create_bus(net, vn_kv=110.0, name="g1")
     pp.create_ext_grid(net, a0, vm_pu=1.02, va_degree=0.0)
 
-    lp = dict(length_km=1.0, r_ohm_per_km=0.08, x_ohm_per_km=0.32,
-              c_nf_per_km=12.0, max_i_ka=1.0)
+    lp = {"length_km": 1.0, "r_ohm_per_km": 0.08, "x_ohm_per_km": 0.32, "c_nf_per_km": 12.0, "max_i_ka": 1.0}
     pp.create_line_from_parameters(net, a0, a1, **lp)
-    tie = pp.create_line_from_parameters(net, a1, g0, **lp)   # the only A<->B link
+    tie = pp.create_line_from_parameters(net, a1, g0, **lp)  # the only A<->B link
     pp.create_line_from_parameters(net, g0, g1, **lp)
 
     pp.create_load(net, a1, p_mw=6.0, q_mvar=1.5)
@@ -236,12 +261,11 @@ def multi_branch_group():
     b = [pp.create_bus(net, vn_kv=110.0, name=f"b{i}") for i in range(6)]
     pp.create_ext_grid(net, b[0], vm_pu=1.0, va_degree=0.0)
 
-    lp = dict(length_km=1.0, r_ohm_per_km=0.08, x_ohm_per_km=0.32,
-              c_nf_per_km=12.0, max_i_ka=1.0)
+    lp = {"length_km": 1.0, "r_ohm_per_km": 0.08, "x_ohm_per_km": 0.32, "c_nf_per_km": 12.0, "max_i_ka": 1.0}
     pp.create_line_from_parameters(net, b[0], b[1], **lp)
     pp.create_line_from_parameters(net, b[1], b[2], **lp)
     pp.create_line_from_parameters(net, b[2], b[3], **lp)
-    pp.create_line_from_parameters(net, b[3], b[0], **lp)   # closes the ring
+    pp.create_line_from_parameters(net, b[3], b[0], **lp)  # closes the ring
     s0 = pp.create_line_from_parameters(net, b[3], b[4], **lp)  # spur chain start
     s1 = pp.create_line_from_parameters(net, b[4], b[5], **lp)  # spur chain end
 
@@ -250,7 +274,7 @@ def multi_branch_group():
     pp.create_load(net, b[5], p_mw=3.0, q_mvar=0.6)
 
     _add_outage_group_columns(net)
-    net.line.loc[[s0, s1], "outage_group"] = "string"   # removes both -> islands b4,b5
+    net.line.loc[[s0, s1], "outage_group"] = "string"  # removes both -> islands b4,b5
     return net
 
 

@@ -22,6 +22,7 @@ across CUDA versions and needs none of the deprecated host-LU / cusolverRf API.
 The CSR pattern (Jp/Jj) is shared and constant; only values (d_A_batch) change per call,
 exactly like the resident loop already assumes.
 """
+
 import ctypes
 
 import numpy as np
@@ -43,8 +44,7 @@ def _check(status, what):
 class CusolverQRBatch:
     """Per-system on-device QR solver with the CusolverRfBatch device-buffer interface."""
 
-    def __init__(self, Jp, Jj, batch_size, reorder="symrcm",
-                 numeric_zero=0.0, numeric_boost=0.0, qr_reorder=3):
+    def __init__(self, Jp, Jj, batch_size, reorder="symrcm", numeric_zero=0.0, numeric_boost=0.0, qr_reorder=3):
         # numeric_zero/boost/reorder accepted for signature-compatibility with
         # CusolverRfBatch (the resident solver passes them); QR ignores boost (it has no
         # persistent factor to protect) and uses its own `qr_reorder` fill-reducing scheme.
@@ -60,8 +60,7 @@ class CusolverQRBatch:
         self._spH = ctypes.c_void_p()
         _check(_libcusolver.cusolverSpCreate(ctypes.byref(self._spH)), "cusolverSpCreate")
         self._descr = ctypes.c_void_p()
-        _check(_libcusparse.cusparseCreateMatDescr(ctypes.byref(self._descr)),
-               "cusparseCreateMatDescr")
+        _check(_libcusparse.cusparseCreateMatDescr(ctypes.byref(self._descr)), "cusparseCreateMatDescr")
         _libcusparse.cusparseSetMatType(self._descr, _CUSPARSE_MATRIX_TYPE_GENERAL)
         _libcusparse.cusparseSetMatIndexBase(self._descr, _CUSPARSE_INDEX_BASE_ZERO)
 
@@ -119,12 +118,23 @@ class CusolverQRBatch:
             d_val = ctypes.c_void_p(int(self._d_A_batch) + c * nnz * _F64)
             d_b = ctypes.c_void_p(int(self._d_X_batch) + c * n * _F64)
             d_x = ctypes.c_void_p(int(self._d_Xout) + c * n * _F64)
-            _check(_libcusolver.cusolverSpDcsrlsvqr(
-                self._spH, n, nnz, self._descr,
-                d_val, d_Ap, d_Aj, d_b,
-                ctypes.c_double(0.0), ctypes.c_int(self.qr_reorder),
-                d_x, ctypes.byref(singular)),
-                "cusolverSpDcsrlsvqr")
+            _check(
+                _libcusolver.cusolverSpDcsrlsvqr(
+                    self._spH,
+                    n,
+                    nnz,
+                    self._descr,
+                    d_val,
+                    d_Ap,
+                    d_Aj,
+                    d_b,
+                    ctypes.c_double(0.0),
+                    ctypes.c_int(self.qr_reorder),
+                    d_x,
+                    ctypes.byref(singular),
+                ),
+                "cusolverSpDcsrlsvqr",
+            )
         # copy solutions back into d_X_batch (device->device)
         cuda.memcpy_dtod(self._d_X_batch, self._d_Xout, B * n * _F64)
 
