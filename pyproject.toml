@@ -7,7 +7,7 @@ requires = ["build", "wheel", "setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "p3s"
+name = "parallel-pandapower-solver"
 version = "1.0.1"
 description = "CPU / GPU based AC/DC Powerflow solver"
 readme = "README.md"
@@ -84,9 +84,6 @@ cpp = [
 bugs = "https://github.com/e2niee/p3s/issues"
 changelog = "https://github.com/e2niee/p3s/blob/master/changelog.md"
 homepage = "https://github.com/e2niee/p3s"
-
-[project.scripts]
-p3s = "p3s.cli:app"
 
 [tool.ty]
 # All rules are enabled as "error" by default; no need to specify unless overriding.

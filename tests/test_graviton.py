@@ -87,7 +87,7 @@ def networks():
         case9(),
         case14(),
         case118(),
-        case9241pegase()
+        case9241pegase(),
     ]
     return nets
 
