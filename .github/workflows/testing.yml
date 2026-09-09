@@ -15,6 +15,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev
-      - run: pip install ./p3s/cpp
-      - run: pip install .[test]
+      - run: python3 -m pip install ./p3s/cpp
+      - run: python3 -m pip install .[test]
       - run: pytest --ignore="./tests/cuda" --timeout=900 "./tests"
