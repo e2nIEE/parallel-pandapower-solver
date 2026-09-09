@@ -271,12 +271,12 @@ def _tiny_solve():
     import numpy as np
     from pandapower.networks import case14
 
-    from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+    from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
     from p3s.cuda.nr_polar_solver import PolarNewtonSolverCUDA
     from p3s.NewtonPowerflow import NewtonPowerflow
 
     net = case14()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     npf = NewtonPowerflow(net)
     yb = npf._YBus.tocsr()
     yb.sort_indices()

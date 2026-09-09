@@ -16,7 +16,7 @@ import pytest
 from pandapower import runpp
 from pandapower.networks import case9, case14, case118
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp
 
 CASE_FUNCS = {"case9": case9, "case14": case14, "case118": case118}
@@ -39,7 +39,7 @@ def test_cpp_timeseries_matches_runpp(case, n_threads):
     net = CASE_FUNCS[case]()
     if "trafo" in net and len(net.trafo) > 0:
         net.trafo.shift_degree = 0.0
-        calculateTrafoCharacteristic(net, inplace=True)
+        calculate_trafo_characteristic(net, inplace=True)
     T = 12
 
     npf = NewtonPowerflowCpp(net)
@@ -61,10 +61,3 @@ def test_cpp_timeseries_matches_runpp(case, n_threads):
         va_err = np.abs(va_gpu[:, t] - ref.res_bus.va_degree.values).max()
         assert vm_err < 1e-6, f"{case} t={t} nt={n_threads}: vm err {vm_err:.2e}"
         assert va_err < 1e-4, f"{case} t={t} nt={n_threads}: va err {va_err:.2e}"
-
-
-if __name__ == "__main__":
-    for c in CASE_FUNCS:
-        for nt in (1, 0):
-            test_cpp_timeseries_matches_runpp(c, nt)
-            print(f"{c} (n_threads={nt}): OK")

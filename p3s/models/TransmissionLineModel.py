@@ -81,11 +81,11 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     # 3) Total shunt admittance, split equally at both ends
     Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
 
-    # T-Modell-Zweige
+    # T-Model-Branch
     Z1 = Z2 = Z_sr / 2
     Y0 = 2 * Y_sr
 
-    # Vorberechnen
+    # pre calc
     a1 = 1.0 / Z1
     a2 = 1.0 / Z2
     D = Y0 + a1 + a2
@@ -128,7 +128,6 @@ class TransmissionLineModel(TwoPort):
         X = line_table["x_ohm_per_km"].values
         G = line_table["g_us_per_km"].values
         parallel = line_table["parallel"].values
-        # self.voltages = line_table["vn_kv"].values
         self.voltages = voltages
 
         # return four matrices

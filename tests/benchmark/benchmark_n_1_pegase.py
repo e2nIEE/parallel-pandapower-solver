@@ -15,16 +15,16 @@ taken out one at a time -- comparing:
 This is a SCRIPT, not a pytest test (a full pegase N-1 takes minutes and would interfere
 with the test pipeline). Run it directly:
 
-    python -m p3s.contingency.benchmark_n_1_pegase                # all lines + trafos
-    python -m p3s.contingency.benchmark_n_1_pegase --limit 200    # first 200 contingencies
-    python -m p3s.contingency.benchmark_n_1_pegase --skip-pandapower  # p3s only
-    python -m p3s.contingency.benchmark_n_1_pegase --threads 8 --validate 25
+    python -m tests.benchmark.benchmark_n_1_pegase                # all lines + trafos
+    python -m tests.benchmark.benchmark_n_1_pegase --limit 200    # first 200 contingencies
+    python -m tests.benchmark.benchmark_n_1_pegase --skip-pandapower  # p3s only
+    python -m tests.benchmark.benchmark_n_1_pegase --threads 8 --validate 25
 
 GPU backend (fully-resident polar cuSolverRf path):
 
-    python -m p3s.contingency.benchmark_n_1_pegase --backend gpu --limit 2000
-    python -m p3s.contingency.benchmark_n_1_pegase --backend gpu --gpu-max-chunk 512
-    python -m p3s.contingency.benchmark_n_1_pegase --backend both --limit 2000  # CPU vs GPU
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --limit 2000
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-max-chunk 512
+    python -m tests.benchmark.benchmark_n_1_pegase --backend both --limit 2000  # CPU vs GPU
 
 ``--backend gpu`` needs pycuda + a CUDA GPU + nvcc on PATH (the polar kernels compile at
 import). ``--backend both`` times CPU and GPU on the same net and reports the GPU/CPU
@@ -50,7 +50,7 @@ import time
 import numpy as np
 from pandapower.networks import case9241pegase
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.contingency.ground_truth import enumerate_contingencies, solve_contingency
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
 
@@ -62,7 +62,7 @@ def build_net(limit: int | None = None):
     become contingencies; the rest stay in service (no outage_group).
     """
     net = case9241pegase()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     net.line["outage_group"] = None
     net.trafo["outage_group"] = None
 
@@ -236,6 +236,20 @@ def main():
         "(DEFAULT; needs nvidia-cudss-cuXX); rf=cusolverRf batched (legacy, "
         "segfaults on CUDA 12.4); qr=cusolverSp per-system QR (robust but "
         "slow at scale). Run diagnose_gpu.py to see which work in your env.",
+    )
+    ap.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for results JSON",
+    )
+    ap.add_argument(
+        "--job-id",
+        "-j",
+        type=str,
+        default=None,
+        help="Job ID for output file naming",
     )
     args = ap.parse_args()
 

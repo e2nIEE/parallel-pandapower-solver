@@ -212,6 +212,7 @@ class CudssBatch:
         self._execute(C.CUDSS_PHASE_SOLVE, "cudssExecute(SOLVE)")
 
     def free(self):
+        """Frees memory used by cudss"""
         for m in ("_A", "_b", "_x"):
             h = getattr(self, m, None)
             if h is not None and h.value:

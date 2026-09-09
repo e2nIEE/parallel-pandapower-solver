@@ -17,7 +17,7 @@ import time
 import numpy as np
 from pandapower.networks import case9241pegase
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 from p3s.NewtonPowerflow import NewtonPowerflow
 
@@ -58,7 +58,7 @@ def _cpu_loop(net, scale):
 
 def benchmark(T_list=(64, 256, 1024)):
     net = case9241pegase()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     print(f"case9241pegase: {len(net.bus)} buses, {len(net.load)} loads")
 
     for T in T_list:
@@ -90,7 +90,7 @@ def benchmark(T_list=(64, 256, 1024)):
 def test_benchmark_smoke():
     """Lightweight CI guard: just run a tiny T and assert correctness (not speed)."""
     net = case9241pegase()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     ts, scale = _make_profile(net, 4)
     npf = NewtonPowerflowCUDA(net)
     v_gpu = npf.calculate_timeseries_cuda(net, ts, tolerance=1e-6)

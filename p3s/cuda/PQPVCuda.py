@@ -217,26 +217,8 @@ class PQPVCuda:
     ) -> tuple[gpuarray, gpuarray, gpuarray, int]:
         """Create Jacobian using CUDA acceleration."""
 
-        # Get CSR representation of YBus
-        # ybus: csr_matrix = self._YBus.tocsr()
-        # Yp = _ensure_int32(Yp)
-        # Yj = _ensure_int32(Yj)
-        # Yx = _ensure_c128(Yx)
-        # V = _ensure_c128(voltage)
-
-        # Prepare data
-        # pvpq = _ensure_int32(self._pvpq)
-        # pq = _ensure_int32(self._pq)
-        # pvpq_pos = _ensure_int32(self.pvpq_pos)
-        # pq_pos = _ensure_int32(self.pq_pos)
-
-        # lpvpq = len(pvpq)
-        # lpq = len(pq)
-
         # Prepare data
         Vnorm = np.abs(voltage)
-        # n_elements = len(Yx)
-        # n_buses = len(Yp) - 1
         n_rows = lpvpq + lpq
 
         # Convert to GPU-compatible types
@@ -324,7 +306,6 @@ class PQPVCuda:
         Jp_gpu[:] = Jp_offsets_gpu[:]
 
         # Get actual number of non-zeros
-        # nnz = int(Jp_gpu[-1].get())
         nnz = int(nnz_gpu.get()[0])
 
         # Trim arrays to actual size and copy back to host
@@ -343,10 +324,6 @@ class PQPVCuda:
 
         # Convert to GPU arrays
         dx_gpu = gpuarray.to_gpu(dx.astype(np.float64))
-        # voltage_gpu = gpuarray.to_gpu(voltage.astype(np.complex128))
-        # pq_gpu = gpuarray.to_gpu(np.array(self._pq, dtype=np.int32))
-        # pv_gpu = gpuarray.to_gpu(np.array(self._pv, dtype=np.int32))
-        # pvpq_gpu = gpuarray.to_gpu(np.array(self._pvpq, dtype=np.int32))
 
         # Split voltage into real/imag parts for easier processing
         voltage_real_gpu = gpuarray.to_gpu(np.real(voltage).astype(np.float64))
@@ -371,7 +348,6 @@ class PQPVCuda:
             np.int32(npq),
             np.int32(npv),
             np.int32(self.lpvpq),
-            # np.int32(self._offset),
             block=(block_size, 1, 1),
             grid=(grid_size, 1),
         )
@@ -390,19 +366,8 @@ class PQPVCuda:
     def evaluate_Fx_cuda(self, Sbus_gpu, voltage_gpu, block_size=256) -> tuple[gpuarray, bool]:
         """CUDA version of evaluate_Fx"""
         # Convert to GPU arrays
-        # Sbus_gpu = gpuarray.to_gpu(Sbus.astype(np.complex128))
-        # V_gpu = gpuarray.to_gpu(V.astype(np.complex128))
-        # Yx_gpu = gpuarray.to_gpu(self._YBus.data.astype(np.complex128))
-        # Yp_gpu = gpuarray.to_gpu(self._YBus.indptr.astype(np.int32))
-        # Yj_gpu = gpuarray.to_gpu(self._YBus.indices.astype(np.int32))
-        # pv_gpu = gpuarray.to_gpu(np.array(pv, dtype=np.int32))
-        # pq_gpu = gpuarray.to_gpu(np.array(self._pq, dtype=np.int32))
-
         npv = self.lpv
         npq = self.lpq
-
-        # print(f"npv: {npv}")
-        # print(f"npq: {npq}")
 
         # Result array
         F_gpu = gpuarray.empty(npv + 2 * npq, dtype=np.float64)
@@ -454,47 +419,3 @@ class PQPVCuda:
 
         self.check_convergence_kernel(norm_buffer, np.float64(tolerance), result_gpu, block=(1, 1, 1), grid=(1, 1))
         return True if result_gpu.get()[0] == 1 else False
-
-
-if __name__ == "__main__":
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.linalg import spsolve
-
-    Yx = np.load(r"Yx.npy")
-    Yj = np.load(r"Yj.npy")
-    Yp = np.load(r"Yp.npy")
-
-    pq = np.load(r"pq.npy")
-    pv = np.load(r"pv.npy")
-    # pvpq = np.load(r"pvpq.npy")
-
-    voltage = np.load(r"voltage.npy")
-    mismatch = np.load(r"mismatch.npy")
-    sbus = np.load(r"sbus.npy")
-
-    t = PQPVCuda(Yp, Yj, Yx, pv, pq)
-    Jx_gpu, Jp_gpu, Jj_gpu, nnz = t.create_J_cuda(voltage, Yp, Yj, Yx, pv, pq)
-
-    Jx = Jx_gpu.get()
-    Jp = Jp_gpu.get()
-    Jj = Jj_gpu.get()
-
-    J = csr_matrix((Jx, Jj, Jp))
-    dx = -1 * spsolve(J, mismatch)
-
-    Jx2 = np.load(r"Jx.npy")
-    Jj2 = np.load(r"Jj.npy")
-    Jp2 = np.load(r"Jp.npy")
-
-    J2 = csr_matrix((Jx2, Jj2, Jp2))
-    dx2 = -1 * spsolve(J2, mismatch)
-
-    assert np.array_equal(dx, dx2)
-
-    sbus_gpu = gpuarray.to_gpu(sbus.astype(np.complex128))
-    voltage_gpu = gpuarray.to_gpu(voltage.astype(np.complex128))
-
-    mismatch_gpu = t.evaluate_Fx_cuda(sbus_gpu, voltage_gpu=voltage_gpu)
-
-    converged = t.calculate_norm(mismatch_gpu, tolerance=1e-5)
-    print(converged)

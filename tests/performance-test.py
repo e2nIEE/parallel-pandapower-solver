@@ -30,7 +30,7 @@ from pandapower.networks.power_system_test_cases import (
 from pandapower.run import runpp
 from pandapower.toolbox.data_modification import create_continuous_bus_index
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 from p3s.NewtonPowerflow import NewtonPowerflow
 
@@ -72,13 +72,9 @@ def net_with_trafo_characteristic() -> pandapowerNet:
 if __name__ == "__main__":
     N = 100
 
-    pd.set_option("display.max_rows", 1000)
-    pd.set_option("display.max_columns", 1000)
-    pd.set_option("display.width", 1000)
-
     net = net_with_trafo_characteristic()
     create_continuous_bus_index(net)
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     npf_cuda = NewtonPowerflowCUDA(net)
     npf_cuda.calculate_cuda(net, init="flat")
@@ -112,7 +108,7 @@ if __name__ == "__main__":
         pp_iter = net2["_ppc"]["iterations"]
 
         if len(net["trafo"]) > 0 and "trafo_characteristic_table" not in net:
-            calculateTrafoCharacteristic(net, inplace=True)
+            calculate_trafo_characteristic(net, inplace=True)
 
         cu_start_time = time()
         npf_cuda = NewtonPowerflowCUDA(net)

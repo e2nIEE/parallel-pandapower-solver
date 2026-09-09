@@ -165,9 +165,3 @@ def test_vectorized_build_matches_per_case(name, reslack):
         assert np.allclose(case.Yx, ref.Yx, atol=1e-12), f"{name}/{case.group}: Yx"
         assert np.array_equal(case.served, ref.served), f"{name}/{case.group}: served"
         assert np.array_equal(case.ref_bus, ref.ref_bus), f"{name}/{case.group}: ref_bus"
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v"]))
