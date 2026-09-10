@@ -47,10 +47,11 @@ cd "${p3s_DIR:-$(dirname $(dirname $(readlink -f $0)))}"
 
 # Test specific method on this case
 ${PYTHONBIN}/bin/python ${BASE_PATH}/tests/benchmark/benchmark_n_1_pegase.py \
-    --threads $CPUS \
+    --num-threads $CPUS \
     --skip-pandapower \
     --validate 0 \
-    --limit 5000 \
+    --limit $LIMIT \
+    --output-dir "$OUTPUT_DIR" \
     --job-id "$SLURM_ARRAY_JOB_ID" || EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
