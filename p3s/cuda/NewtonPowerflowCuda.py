@@ -13,8 +13,8 @@ from p3s.cuda import _ctx  # noqa: F401 (retains the CUDA primary context; cuDSS
 
 try:
     from p3s.cuda.cudss_batch import CudssBatch as Cuda_solver
-except:
-    from p3s.cuda.cusolver_rf_batch import CusolverRfBatch as Cuda_solver
+except (FileNotFoundError, ImportError):
+    from p3s.cuda.cusolver_rf_batch import CusolverRfBatch as Cuda_solver  # type: ignore[assignment]
 
 from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage

@@ -335,7 +335,7 @@ def main():
                 results=[],
                 ms_per_cont=[float(t_cpp / n_cont)],
                 errors=[],
-                threads=thread
+                threads=thread,
             )
             results.append(result)
         contingency_results["methods"]["cpp"] = results
@@ -349,12 +349,7 @@ def main():
             f"ms/contingency | converged {n_conv_g}/{n_cont}"
         )
         result: MethodResults = MethodResults(
-            status="success",
-            time_ms=[t_gpu],
-            results=[],
-            ms_per_cont=[float(t_gpu / n_cont)],
-            errors=[],
-            thread=0
+            status="success", time_ms=[t_gpu], results=[], ms_per_cont=[float(t_gpu / n_cont)], errors=[], thread=0
         )
         contingency_results["methods"]["gpu"] = [result]
 

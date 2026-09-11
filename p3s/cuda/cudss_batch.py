@@ -2,15 +2,16 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Batched sparse direct solver via NVIDIA cuDSS.
+"""Batched sparse direct solver via NVIDIA cuDSS -- the cusolverRf replacement.
 
-Drop-in backend for the fully resident polar Newton solver, exposing the same device-buffer
+Drop-in backend for the fully-resident polar Newton solver, exposing the same device-buffer
 interface as ``CusolverRfBatch`` / ``CusolverQRBatch`` so ``nr_polar_solver.py`` and the
-assembly kernels are unchanged.
+assembly kernels are unchanged. See ``docs/cudss_migration_plan.md``.
 
-cuDSS is the modern, supported successor with the SAME amortization we need to analyze
-(reorder and symbolic) ONCE, then rerun the factorization phase with values-only updates
-every Newton iteration, and a batched solve over all systems that share the CSR pattern.
+Why cuDSS: cusolverRf's host-LU path segfaults on CUDA 12.4 (see ``diagnose_gpu.py``); cuDSS
+is the modern, supported successor with the SAME amortization we need -- analyze (reorder +
+symbolic) ONCE, then rerun the factorization phase with values-only updates every Newton
+iteration, and a batched solve over all systems that share the CSR pattern.
 
 Interface (matches the other backends):
   d_A_batch   : float64 (B*nnz)  Jacobian values, system-major (system c at c*nnz)
@@ -20,14 +21,19 @@ Interface (matches the other backends):
   reset_refactor_device()    -> cudssExecute(FACTORIZATION) on current d_A_batch
   batch_solve_device()       -> cudssExecute(SOLVE); solution in d_X_batch
 
+Host-facing counterparts (upload/download for you; mirror CusolverRfBatch):
+  reset_refactor(Jx_batch)   -> upload (B,nnz) values, then factorize
+  batch_solve(rhs_batch)     -> upload (B,n) RHS, solve, return (B,n) solution
+  solve(Jx_batch, rhs_batch) -> both of the above
+
 ONE semantic difference from cusolverRf/QR: cuDSS solve is OUT-OF-PLACE (x != b), so this
 backend keeps d_rhs_batch and d_X_batch as DISTINCT buffers. The rf/qr backends alias them
 (in-place solve); nr_polar_solver handles both via the d_rhs_batch/d_X_batch split.
 
-Uniform batch: all systems share Jp/Jj (same n, nnz, pattern), the time-series and N-1
+Uniform batch: all systems share Jp/Jj (same n, nnz, pattern) -- our time-series and N-1
 batches. cuDSS batch matrices take arrays-of-device-pointers per system; since the pattern
 is shared, every system's rowStart/colIndices pointer is the SAME (d_Jp / d_Jj) and only the
-value pointer advances by nnz.
+values pointer advances by nnz.
 """
 
 import ctypes
@@ -211,8 +217,55 @@ class CudssBatch:
         """Triangular solves; rhs in d_rhs_batch -> solution in d_X_batch (out-of-place)."""
         self._execute(C.CUDSS_PHASE_SOLVE, "cudssExecute(SOLVE)")
 
+    # ---------------------------------------------------------------- host API
+    # Host-facing counterparts of the device-resident calls above, mirroring
+    # CusolverRfBatch.reset_refactor / batch_solve / solve so the two backends are
+    # interchangeable from host code (tests, one-off solves, the gold checks). These DO
+    # copy: values/RHS are uploaded and the solution is downloaded. The fully-resident
+    # Newton loop must keep using the *_device variants -- it already has everything on
+    # the GPU and a per-iteration round-trip would defeat the whole design.
+
+    def reset_refactor(self, Jx_batch: np.ndarray):
+        """Upload new per-system values, then (re)factorize.
+
+        ``Jx_batch`` is (B, nnz) float64, or (nnz,) to broadcast one system's values to
+        the whole batch (matching CusolverRfBatch.reset_refactor).
+        """
+        if not self._setup_done:
+            raise RuntimeError("call symbolic_setup() first")
+        B, nnz = self.batch_size, self.nnz
+        vals = np.asarray(Jx_batch, dtype=np.float64)
+        if vals.size == nnz:
+            vals = np.broadcast_to(vals.reshape(nnz), (B, nnz))
+        vals = np.ascontiguousarray(vals.reshape(B, nnz).reshape(-1))
+        cuda.memcpy_htod(self._d_A_batch, vals)
+        self.reset_refactor_device()
+
+    def batch_solve(self, rhs_batch: np.ndarray) -> np.ndarray:
+        """Solve with the current factorization. ``rhs_batch`` is (B, n) float64.
+
+        Returns the (B, n) float64 solution. Unlike cusolverRf (in-place), cuDSS writes
+        the solution to a SEPARATE buffer, so ``rhs_batch`` is left untouched on device.
+        """
+        if not self._setup_done:
+            raise RuntimeError("call symbolic_setup() first")
+        if not self._factored_once:
+            raise RuntimeError("call reset_refactor() / reset_refactor_device() first")
+        B, n = self.batch_size, self.n
+        rhs = np.ascontiguousarray(np.asarray(rhs_batch, dtype=np.float64).reshape(B, n).reshape(-1))
+        cuda.memcpy_htod(self._d_rhs_batch, rhs)
+        self.batch_solve_device()
+        cuda.Context.synchronize()
+        out = np.empty(B * n, dtype=np.float64)
+        cuda.memcpy_dtoh(out, self._d_X_batch)
+        return out.reshape(B, n)
+
+    def solve(self, Jx_batch: np.ndarray, rhs_batch: np.ndarray) -> np.ndarray:
+        """Convenience: (re)factorize with ``Jx_batch``, then solve ``rhs_batch``."""
+        self.reset_refactor(Jx_batch)
+        return self.batch_solve(rhs_batch)
+
     def free(self):
-        """Frees memory used by cudss"""
         for m in ("_A", "_b", "_x"):
             h = getattr(self, m, None)
             if h is not None and h.value:

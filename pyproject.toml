@@ -78,6 +78,11 @@ test = [
 # (cuda-toolkit must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
 cpp = [
     "p3s-cpp",
+    "suitesparse",
+]
+
+cuda = [
+    "pycuda"
 ]
 
 [project.urls]
