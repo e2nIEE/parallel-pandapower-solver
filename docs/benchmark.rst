@@ -16,6 +16,8 @@ Directory Structure
 - :code:`benchmark_all.sbatch` SLURM job for all IEEE cases
 - :code:`benchmark_cpu.sbatch` SLURM job to run pegase with different core counts
 - :code:`benchmark_gpu.bsbatch` SLURM job for all IEEE cases on gpu only
+- :code:`benchmark_n_1_pegase.py` Test script to calculate contingency analysis performance on IEEE Pegase 9241
+- :code:`benchmark_n-1.bsbatch` SLURM job for contingency analysis test
 - :code:`cpu_benchmark_results.py` Results aggregation tool for the cpu benchmark
 
 Quick Start
@@ -24,32 +26,36 @@ Quick Start
 1. List Available Cases
 .. code-block:: bash
 
-   python tests/benchmark_batched.py --list-cases
+   python tests/benchmark/benchmark_batched.py --list-cases
 
 
 2. Test Locally
 .. code-block:: bash
 
     # Test case9 with all methods
-    python tests/benchmark_batched.py --case case9 --methods pp,grav,cpp-1thr,cpp-Nthr,gpu
+    python tests/benchmark/benchmark_batched.py --case case9 --methods pp,p3s,cpp-1thr,cpp-Nthr,gpu
 
     # Test with specific T values
-    python tests/benchmark_batched.py --case case118 --method gpu --T 64 256 1024
+    python tests/benchmark/benchmark_batched.py --case case118 --method gpu --T 64 256 1024
 
 3. Run on Cluster
 .. code-block:: bash
 
     # Submit all IEEE cases (job array: 0-29)
-    sbatch tests/benchmark_all.sbatch
+    sbatch tests/benchmark/benchmark_all.sbatch
 
     # Submit specific method
-    METHOD=gpu sbatch tests/benchmark_all.sbatch
+    METHOD=gpu sbatch tests/benchmark/benchmark_all.sbatch
 
 4. Compile Results
 .. code-block:: bash
 
     sbatch tests/resources/compile_results.sbatch
     python tests/compile_results.py --output-dir /mnt/home/user/p3s/results
+
+5. Comparison of Results
+
+Result comparison is optional but will be performed, if method pp is selected.
 
 Available Methods
 -----------------
@@ -72,17 +78,7 @@ Environment Variables
 ---------------------
 
 - :code:`P3S_BENCH_CUDA=1` Enable GPU benchmarking
-- :code:`CUDA_VISIBLE_DEVICES` Set GPU device (SLURM sets automatically)
-
-SLURM Parameters
-----------------
-
-Default configuration in :code:`benchmark_all.sbatch`:
-- Nodes: 1
-- CPUs: 64 (2×32-core CPUs)
-- GPUs: 2 (NVIDIA)
-- Memory: 256 GB
-- Time limit: 6 hours
+- :code:`CUDA_VISIBLE_DEVICES` Set GPU device
 
 T Values (Time Steps)
 ---------------------
@@ -128,7 +124,6 @@ Results missing
 ---------------
 
 - Check output directory exists
-- Verify SLURM job completed successfully
 - Check log files for errors
 
 Advanced Usage
@@ -140,10 +135,10 @@ Custom Method Selection
 .. code-block:: bash
 
     # Only test C++ and GPU
-    python tests/benchmark_batched.py --case case9 --methods cpp,gpu
+    python tests/benchmark/benchmark_batched.py --case case9 --methods cpp,gpu
 
     # Only single-threaded C++
-    python tests/benchmark_batched.py --case case14 --method cpp-1thr
+    python tests/benchmark/benchmark_batched.py --case case14 --method cpp-1thr
 
 
 Custom T Values
@@ -152,7 +147,7 @@ Custom T Values
 .. code-block:: bash
 
     # Test with different time steps
-    python tests/benchmark_batched.py --case case300 --T 100 500 1000 5000
+    python tests/benchmark/benchmark_batched.py --case case300 --T 100 500 1000 5000
 
 Manual Result Compilation
 -------------------------
@@ -169,4 +164,3 @@ References
 
 - IEEE Test Cases from pandapower: https://pandapower.readthedocs.io/en/latest/networks/power_system_test_cases.html
 - p3s Documentation: See project docs
-- SLURM Manual: https://slurm.schedmd.com/
