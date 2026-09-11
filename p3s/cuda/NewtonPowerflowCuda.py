@@ -10,7 +10,12 @@ from numpy.typing import NDArray
 from pandapower import LoadflowNotConverged, pandapowerNet
 
 from p3s.cuda import _ctx  # noqa: F401 (retains the CUDA primary context; cuDSS-safe)
-from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+
+try:
+    from p3s.cuda.cudss_batch import CudssBatch as Cuda_solver
+except:
+    from p3s.cuda.cusolver_rf_batch import CusolverRfBatch as Cuda_solver
+
 from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage
 
@@ -89,7 +94,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         Jj0 = np.ascontiguousarray(Jj, dtype=np.int32)
         Jj_sorted, perm = _sort_csr_pattern(Jp, Jj0)
 
-        solver = CusolverRfBatch(Jp, Jj_sorted, batch_size=1)
+        solver = Cuda_solver(Jp, Jj_sorted, batch_size=1)
         solver.symbolic_setup(np.ascontiguousarray(Jx0, dtype=np.float64)[perm])
 
         i = 0
@@ -330,7 +335,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
             for c in range(B):
                 mismatch[c] = self._calc_mismatch(sbus_chunk[:, c], V[:, c])
 
-            solver = CusolverRfBatch(Jp, Jj_sorted, batch_size=B, reorder=reorder)
+            solver = Cuda_solver(Jp, Jj_sorted, batch_size=B, reorder=reorder)
             solver.symbolic_setup(np.ascontiguousarray(Jx0, dtype=np.float64)[perm])
 
             converged_mask = np.zeros(B, dtype=bool)
