@@ -16,20 +16,14 @@ Directory Structure
 - :code:`benchmark_all.sbatch` SLURM job for all IEEE cases
 - :code:`benchmark_cpu.sbatch` SLURM job to run pegase with different core counts
 - :code:`benchmark_gpu.bsbatch` SLURM job for all IEEE cases on gpu only
-- :code:`benchmark_n_1_pegase.py` Test script to calculate contingency analysis performance on IEEE Pegase 9241
+- :code:`benchmark_n_1_pegase.py` Standalone N-1 contingency-analysis benchmark on IEEE Pegase 9241
 - :code:`benchmark_n-1.bsbatch` SLURM job for contingency analysis test
 - :code:`cpu_benchmark_results.py` Results aggregation tool for the cpu benchmark
 
 Quick Start
 ===========
 
-1. List Available Cases
-.. code-block:: bash
-
-   python tests/benchmark/benchmark_batched.py --list-cases
-
-
-2. Test Locally
+1. Test Locally
 .. code-block:: bash
 
     # Test case9 with all methods
@@ -38,7 +32,7 @@ Quick Start
     # Test with specific T values
     python tests/benchmark/benchmark_batched.py --case case118 --method gpu --T 64 256 1024
 
-3. Run on Cluster
+2. Run on a Cluster
 .. code-block:: bash
 
     # Submit all IEEE cases (job array: 0-29)
@@ -47,13 +41,13 @@ Quick Start
     # Submit specific method
     METHOD=gpu sbatch tests/benchmark/benchmark_all.sbatch
 
-4. Compile Results
+3. Compile Results
 .. code-block:: bash
 
     sbatch tests/resources/compile_results.sbatch
     python tests/compile_results.py --output-dir /mnt/home/user/p3s/results
 
-5. Comparison of Results
+4. Comparison of Results
 
 Result comparison is optional but will be performed, if method pp is selected.
 
@@ -100,13 +94,6 @@ output-dir: :code:`/mnt/home/user/p3s/results`
 
 Troubleshooting
 ===============
-
-Job fails with "Case not found"
--------------------------------
-
-- Check case name spelling
-- Use :code:`--list-cases` to see available cases
-
 
 GPU not available
 -----------------
@@ -158,6 +145,81 @@ Manual Result Compilation
       --include-partial \
       --include-error-unknown \
       --output-dir ./results/235449/
+
+N-1 Contingency Benchmark
+=========================
+
+The :code:`benchmark_n_1_pegase.py` script is a standalone N-1 benchmark (not a pytest test,
+as a full pegase N-1 takes minutes and would interfere with the test pipeline). It times a full
+single-element N-1 contingency analysis -- every line **and** every transformer taken out one
+at a time -- comparing:
+
+- :code:`p3s`'s batched C++/KLU solver (:code:`solve_contingencies_cpp`, all cores), which
+  shares one symbolic factorization across the whole batch, against
+- a pandapower per-contingency loop (a fresh :code:`runpp` per outage), the reference an N-1
+  study would otherwise run.
+
+GPU backend (fully-resident polar cuSolverRf path) is also supported via
+:code:`solve_contingencies_cuda`.
+
+Quick Start
+-----------
+
+.. code-block:: bash
+
+    # All lines + transformers
+    python -m tests.benchmark.benchmark_n_1_pegase
+
+    # First 200 contingencies (quick estimate)
+    python -m tests.benchmark.benchmark_n_1_pegase --limit 200
+
+    # p3s only (skip the slow pandapower loop)
+    python -m tests.benchmark.benchmark_n_1_pegase --skip-pandapower
+
+    # 8 threads + spot-check 25 contingencies against pandapower
+    python -m tests.benchmark.benchmark_n_1_pegase --threads 8 --validate 25
+
+GPU backend
+-----------
+
+.. code-block:: bash
+
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --limit 2000
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-max-chunk 512
+    python -m tests.benchmark.benchmark_n_1_pegase --backend both --limit 2000  # CPU vs GPU
+
+:code:`--backend gpu` needs pycuda + a CUDA GPU + nvcc on PATH (the polar kernels compile at
+import). :code:`--backend both` times CPU and GPU on the same net and reports the GPU/CPU
+speedup and their max voltage disagreement on mutually-converged cases. On a small GPU (e.g.
+4 GB), cap the per-chunk batch with :code:`--gpu-max-chunk` (the solver also chunks by free
+memory automatically). :code:`--backend cpp` (default) is the original nr_klu path.
+
+Options
+-------
+
+- :code:`--limit N` Only benchmark the first N branches (default: all lines + trafos)
+- :code:`--threads N` nr_klu OpenMP threads (0 = all cores, 1 = serial; default 0)
+- :code:`--num-threads N...` Number of threads (only supported for method cpp)
+- :code:`--skip-pandapower` Time p3s only (skip the slow pandapower loop)
+- :code:`--validate N` Spot-check N contingencies vs pandapower (default 10)
+- :code:`--chunk N` CPU only: solve in memory-bounded chunks of N contingencies
+- :code:`--backend {cpp,gpu,both}` Which p3s solver to time (default cpp)
+- :code:`--gpu-max-chunk N` GPU: cap the per-chunk batch size
+- :code:`--gpu-backend {rf,qr,cudss}` GPU linear-solve backend (default cudss)
+- :code:`--output-dir / -o` Output directory for results JSON
+- :code:`--job-id / -j` Job ID for output file naming
+
+Notes
+-----
+
+- :code:`init="flat"` is used: p3s's simplified DC model does a flat start and converges
+  Pegase 9241 in ~6 iterations.
+- The pandapower loop dominates wall-clock (~0.25 s/contingency). For the full ~16k
+  contingencies that is ~1.1 hour, so use :code:`--limit` for a quick estimate or
+  :code:`--skip-pandapower` to time only p3s.
+- With :code:`--chunk`, the full result table (n_bus x L complex128, ~2.4 GB for pegase over
+  all ~16k branches) is kept in memory one chunk at a time, but no result table is retained,
+  which disables :code:`--validate`.
 
 References
 ==========
