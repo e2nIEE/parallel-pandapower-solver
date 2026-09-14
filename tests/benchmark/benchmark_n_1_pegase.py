@@ -216,7 +216,7 @@ def main():
     ap.add_argument(
         "--backend",
         choices=("cpp", "gpu", "both"),
-        default="cpp",
+        default="both",
         help="which p3s solver to time: cpp=nr_klu (default), "
         "gpu=fully-resident polar cuSolverRf, both=run both and compare",
     )
