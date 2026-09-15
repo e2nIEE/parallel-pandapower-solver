@@ -29,9 +29,9 @@ from typing import TypeVar
 
 import numpy as np
 from benchmark_batched import BenchmarkResults, MethodResults
-from benchmark_n_1_pegase import BenchmarkResults as N1BenchmarkResults, MethodResults as N1MethodResults
+from benchmark_n_1_pegase import BenchmarkResults as N1BenchmarkResults
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 COLORS = [
     (57 / 256, 55 / 256, 139 / 256),  # fh-8
@@ -41,6 +41,7 @@ COLORS = [
     (253 / 256, 195 / 256, 0 / 256),  # fh-20
     (235 / 256, 106 / 256, 10 / 256),  # fh-16
 ]
+
 
 class Res[T]:
     def __init__(self, res: T):
@@ -575,10 +576,7 @@ def generate_time_vs_bus_graph(
         plt.close()
 
 
-def generate_n_1_graph(
-    results: N1BenchmarkResults,
-    output_dir: str
-) -> None:
+def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
     """Generate time vs core count graphs.
 
     Y-axis: time_ms converted to seconds (log scale)
@@ -602,7 +600,7 @@ def generate_n_1_graph(
     colors = COLORS
     for i, method in enumerate(sorted(methods_in_data)):
         color_map[method] = colors[i % len(colors)]
-        color_map[f"{method}_per"] = colors[(i+1) % len(colors)]
+        color_map[f"{method}_per"] = colors[(i + 1) % len(colors)]
 
     all_cases = set()
     all_cases.add(results["case"])
@@ -636,7 +634,7 @@ def generate_n_1_graph(
         plt.xlabel("Thread count")
         plt.xticks(threads_count)
         plt.ylabel("time (s)")
-        plt.title(f"Time vs Thread Count for n-1 Contingency Analysis")
+        plt.title("Time vs Thread Count for n-1 Contingency Analysis")
 
         # plt.xscale("log")
         # plt.yscale("log")
@@ -645,7 +643,7 @@ def generate_n_1_graph(
         plt.grid(True, alpha=0.3)
         plt.tight_layout(pad=0.5)
         plt.savefig(
-            output_path / f"n-1_times.png",
+            output_path / "n-1_times.png",
             dpi=150,
         )
         plt.close()
@@ -659,7 +657,7 @@ def compile_results(
     include_error_unknown: bool = False,
     include_fail: bool = False,
     include_not_available: bool = False,
-    use_global_extrema: bool = False
+    use_global_extrema: bool = False,
 ):
     """Compile all results into a pandas DataFrame.
 
@@ -739,14 +737,11 @@ def compile_results_n_1(
     except Exception as e:
         print(f"Failed to load results from {json_files[0]}: {e}")
 
-    print(f"\nLoaded result file")
+    print("\nLoaded result file")
 
     if generate_graphs:
         print("\nGenerating graphs...")
-        generate_n_1_graph(
-            results,
-            output_dir
-        )
+        generate_n_1_graph(results, output_dir)
         print(f"Graphs saved to: {output_dir}")
 
     return results
@@ -809,11 +804,7 @@ Examples:
         action="store_true",
         help="Use global extrema for timesteps graph (default: per-method extrema)",
     )
-    parser.add_argument(
-        "--n-1",
-        action="store_true",
-        help="Generate the graph for n-1 contingency results."
-    )
+    parser.add_argument("--n-1", action="store_true", help="Generate the graph for n-1 contingency results.")
 
     args = parser.parse_args()
 

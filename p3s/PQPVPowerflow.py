@@ -12,7 +12,7 @@ from scipy.sparse import csr_matrix
 from p3s.PowerflowObject import PowerflowObject
 
 
-#@jit(nopython=True, cache=False)
+# @jit(nopython=True, cache=False)
 def _count_row_nnz(row_list, Yp, Yj, pvpq_pos, pq_pos):
     """Count contributions per output row (same as CUDA count kernel)."""
     counts = np.zeros(len(row_list), dtype=np.int32)
@@ -30,7 +30,7 @@ def _count_row_nnz(row_list, Yp, Yj, pvpq_pos, pq_pos):
     return counts
 
 
-#@jit(nopython=True, cache=False)
+# @jit(nopython=True, cache=False)
 def get_ybus_diag_ix(Ybus_indices, Ybus_indptr, N_YBUS_SHAPE):
     diag_data_ix = np.zeros(N_YBUS_SHAPE, dtype=np.int32)
     for col in range(N_YBUS_SHAPE):
@@ -44,7 +44,7 @@ def get_ybus_diag_ix(Ybus_indices, Ybus_indptr, N_YBUS_SHAPE):
     return diag_data_ix
 
 
-#@jit(nopython=True, cache=False)
+# @jit(nopython=True, cache=False)
 def _dSbus_dV_numba_faster_sparse(
     Yx: NDArray, Yp: NDArray, Yj: NDArray, Yd: NDArray, voltage: NDArray
 ):  # pragma: no cover
@@ -71,7 +71,7 @@ def _dSbus_dV_numba_faster_sparse(
     return dS_dVm, dS_dVa
 
 
-#@jit(nopython=True, cache=False)
+# @jit(nopython=True, cache=False)
 def _create_J_numba(Yp, Yj, Yx, Yd, _pvpq, _pq, pvpq_pos, pq_pos, voltage):  # pragma: no cover
     """Construct Jacobian J by first computing dS derivatives, then assembling J.
 

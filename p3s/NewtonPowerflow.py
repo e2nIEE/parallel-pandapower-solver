@@ -156,7 +156,7 @@ class NewtonPowerflow:
             # and add the vm and va set point to the initial voltage vector
             self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
 
-        self._sBus = -1. * sBus.values / net.sn_mva  # type: ignore[operator]
+        self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
         self.busses = {"ref": ref, "pv": pv, "pq": pq}
 
