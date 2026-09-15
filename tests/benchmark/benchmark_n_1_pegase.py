@@ -190,8 +190,7 @@ def validate(net, res, groups, n_sample: int):
             va_max = max(va_max, float(np.nanmax(np.abs(res.va[served, c] - gt.va[served]))))
     return vm_max, va_max, mask_mismatch, len(idx)
 
-
-def main():
+def _parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
         "--limit", type=int, default=None, help="only benchmark the first N branches (default: all lines+trafos)"
@@ -237,8 +236,10 @@ def main():
         "segfaults on CUDA 12.4); qr=cusolverSp per-system QR (robust but "
         "slow at scale). Run diagnose_gpu.py to see which work in your env.",
     )
-    args = ap.parse_args()
+    return ap.parse_args()
 
+def main():
+    args = _parse_args()
     print("Building case9241pegase with per-branch outage groups ...")
     net, n_branches = build_net(args.limit)
     groups = enumerate_contingencies(net)
