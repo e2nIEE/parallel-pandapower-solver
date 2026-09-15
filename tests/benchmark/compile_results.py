@@ -777,7 +777,7 @@ Examples:
     parser.add_argument(
         "--method",
         type=str,
-        help="Filter by method (pp,grav,gpu,cpp-1thr,cpp-Nthr)",
+        help="Filter by method (pp,p3s,gpu,cpp-1thr,cpp-Nthr)",
     )
     parser.add_argument(
         "--no-graphs",
