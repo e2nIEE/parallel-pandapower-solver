@@ -16,7 +16,9 @@ from pandapower.networks import case9, case14, case118, case9241pegase
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
-from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+pytest.importorskip("pycuda.driver", reason="pycuda is not installed")
+
+from p3s.cuda.cusolver_rf_batch import CusolverRfBatch  # noqa: E402
 
 CASES = {"case9": case9(), "case14": case14(), "case118": case118(), "case9241": case9241pegase()}
 

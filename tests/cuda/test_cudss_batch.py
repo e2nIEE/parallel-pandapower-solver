@@ -15,7 +15,6 @@ installed) to exercise it.
 """
 
 import numpy as np
-import pycuda.driver as cuda
 import pytest
 from pandapower.networks import case14, case118
 from scipy.sparse import csr_matrix
@@ -26,6 +25,8 @@ from p3s.NewtonPowerflow import NewtonPowerflow
 
 pytest.importorskip("pycuda", reason="pycuda not installed")
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
+
+import pycuda.driver as cuda    # noqa: E402
 
 # GPU + libcudss must both be present, else skip the module.
 try:

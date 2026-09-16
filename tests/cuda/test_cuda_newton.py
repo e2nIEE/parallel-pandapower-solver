@@ -17,7 +17,10 @@ from pandapower import runpp
 from pandapower.networks import case9, case14, case118
 
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
-from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
+
+pytest.importorskip("pycuda", reason="pycuda not installed")
+
+from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA  # noqa: E402
 
 CASE_FUNCS = {"case9": case9, "case14": case14, "case118": case118}
 
