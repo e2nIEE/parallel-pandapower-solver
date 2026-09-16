@@ -16,7 +16,7 @@ import pytest
 from pandapower import runpp
 from pandapower.networks import case9, case14, case118
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 
 CASE_FUNCS = {"case9": case9, "case14": case14, "case118": case118}
@@ -25,7 +25,7 @@ CASE_FUNCS = {"case9": case9, "case14": case14, "case118": case118}
 @pytest.mark.parametrize("case", list(CASE_FUNCS))
 def test_calculate_cuda_matches_runpp(case):
     net = CASE_FUNCS[case]()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     ref = copy.deepcopy(net)
     runpp(ref, init="flat")

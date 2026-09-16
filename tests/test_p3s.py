@@ -25,7 +25,7 @@ from pandapower.networks.power_system_test_cases import case5, case9, case14, ca
 from pandapower.run import runpp
 from pandapower.toolbox.data_modification import create_continuous_bus_index
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 
@@ -98,7 +98,7 @@ def test_trafo():
     net2 = copy.deepcopy(net)
 
     runpp(net2, trafo_model="t", init="flat", lightsim2grid=False, numba=False, calculate_voltage_angles=True)
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     npf = NewtonPowerflow(net)
     npf.calculate(net, init="flat")
@@ -123,7 +123,7 @@ def test_p3s(networks: pandapowerNet):
     # initialize all the jit parts, for both pp and p3s
     runpp(networks[0], init="flat")
 
-    calculateTrafoCharacteristic(networks[0], inplace=True)
+    calculate_trafo_characteristic(networks[0], inplace=True)
     npf = NewtonPowerflow(networks[0])
     npf.calculate(networks[0], init="flat")
 
@@ -138,7 +138,7 @@ def test_p3s(networks: pandapowerNet):
         pp_time = (time() - pp_time) / N
 
         if len(net["trafo"]) > 0 and "trafo_characteristic_table" not in net:
-            calculateTrafoCharacteristic(net, inplace=True)
+            calculate_trafo_characteristic(net, inplace=True)
 
         # voltage = (net2.res_bus.vm_pu * np.exp(1j * np.deg2rad(net2.res_bus.va_degree))).values
 

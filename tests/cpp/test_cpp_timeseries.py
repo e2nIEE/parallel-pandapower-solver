@@ -16,7 +16,7 @@ import pytest
 from pandapower import runpp
 from pandapower.networks import case9, case14, case118
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp
 
 CASE_FUNCS = {"case9": case9, "case14": case14, "case118": case118}
@@ -39,7 +39,7 @@ def test_cpp_timeseries_matches_runpp(case, n_threads):
     net = CASE_FUNCS[case]()
     if "trafo" in net and len(net.trafo) > 0:
         net.trafo.shift_degree = 0.0
-        calculateTrafoCharacteristic(net, inplace=True)
+        calculate_trafo_characteristic(net, inplace=True)
     T = 12
 
     npf = NewtonPowerflowCpp(net)

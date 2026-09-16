@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from pandapower.auxiliary import pandapowerNet
 
 
-def calculateTrafoCharacteristic(net: pandapowerNet, inplace: bool = False):
+def calculate_trafo_characteristic(net: pandapowerNet, inplace: bool = False):
 
     # tap_min = net.trafo["tap_min"]
     # tap_max = net.trafo["tap_max"]
@@ -119,5 +119,5 @@ if __name__ == "__main__":
 
     net = nw.case14()
 
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     pass

@@ -16,7 +16,7 @@ import pytest
 from pandapower import runpp
 from pandapower.networks import case9, case14
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 
 CASE_FUNCS = {"case9": case9, "case14": case14}
@@ -42,7 +42,7 @@ def _make_profile(net, T, seed=0):
 @pytest.mark.parametrize("case", list(CASE_FUNCS))
 def test_timeseries_matches_per_step_runpp(case):
     net = CASE_FUNCS[case]()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     T = 12
 
     npf = NewtonPowerflowCUDA(net)

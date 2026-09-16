@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from pandapower.networks import case9241pegase
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.contingency.ground_truth import enumerate_contingencies, solve_contingency
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
 from p3s.NewtonPowerflowCpp import NewtonPowerflow as NewtonPowerflowCpp
@@ -38,7 +38,7 @@ N_LINE_CONTINGENCIES = 4
 @pytest.fixture(scope="module")
 def pegase_net():
     net = case9241pegase()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     net.line["outage_group"] = None
     net.trafo["outage_group"] = None
     for i, lid in enumerate(list(net.line.index[:N_LINE_CONTINGENCIES])):
@@ -103,7 +103,7 @@ N_BENCH_CONTINGENCIES = 50
 @pytest.fixture(scope="module")
 def pegase_bench_net():
     net = case9241pegase()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     net.line["outage_group"] = None
     net.trafo["outage_group"] = None
     for i, lid in enumerate(list(net.line.index[:N_BENCH_CONTINGENCIES])):

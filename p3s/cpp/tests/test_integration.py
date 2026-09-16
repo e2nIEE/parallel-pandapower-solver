@@ -10,7 +10,7 @@ import numpy as np
 import pandapower as pp
 from pandapower.networks.power_system_test_cases import case9, case14, case118, case9241pegase
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflowCpp import NewtonPowerflow
 
 CASES = {"case9": case9, "case14": case14, "case118": case118, "case9241": case9241pegase}
@@ -20,7 +20,7 @@ for name, fn in CASES.items():
     net = fn()
     if "trafo" in net and len(net.trafo) > 0:
         net.trafo.shift_degree = 0.0
-        calculateTrafoCharacteristic(net, inplace=True)
+        calculate_trafo_characteristic(net, inplace=True)
 
     pp.runpp(net)  # reference
     vm_ref = net.res_bus.vm_pu.to_numpy()

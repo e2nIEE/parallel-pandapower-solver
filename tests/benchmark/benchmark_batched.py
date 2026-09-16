@@ -41,7 +41,7 @@ except ImportError:
 
 from pandapower.run import runpp
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 # The C++ batch needs the compiled nr_klu extension (Linux .so / Windows .pyd). If it
@@ -431,7 +431,7 @@ def benchmark_newton(
 ) -> BenchmarkResults:
     """Run Newton-family benchmarks and return structured results."""
     net.trafo.shift_degree = 0.0
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     benchmark_res: BenchmarkResults = BenchmarkResults(
         case=net.name,
@@ -461,7 +461,7 @@ def benchmark_newton(
 def benchmark_cpp_multicore(net: pandapowerNet, timesteps: list[int], n_threads: list[int]) -> BenchmarkResults:
     """Run Newton-family benchmarks and return structured results."""
     net.trafo.shift_degree = 0.0
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     benchmark_res: BenchmarkResults = BenchmarkResults(
         case=net.name,
