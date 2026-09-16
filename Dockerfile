@@ -1,7 +1,8 @@
-#FROM python:3-alpine3.20
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
 FROM python:3.12-slim
 
-# RUN apk update && apk add --no-cache cmake make gcc g++ musl-dev openssl-dev linux-headers suitesparse-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake libsuitesparse-dev && rm -rf /var/lib/apt/lists/*
 
