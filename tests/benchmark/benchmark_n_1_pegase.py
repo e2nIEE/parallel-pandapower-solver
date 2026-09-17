@@ -254,7 +254,8 @@ def _parse_args():
     ap.add_argument(
         "--gpu-max-chunk",
         type=int,
-        default=None,
+        nargs='+',
+        default=[512],
         help="GPU: cap the per-chunk batch size (default: memory-budget only). "
         "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
         "leave unset on large GPUs (A100) so the memory budget decides.",
@@ -344,22 +345,28 @@ def main():
         contingency_results["methods"]["cpp"] = results
 
     if do_gpu:
-        mc_note = f", max_chunk={args.gpu_max_chunk}" if args.gpu_max_chunk else ""
-        print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
-        res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
-        print(
-            f"  polar GPU: {t_gpu:.3f} s total | {t_gpu / n_cont * 1e3:.3f} "
-            f"ms/contingency | converged {n_conv_g}/{n_cont}"
-        )
-        result: MethodResults = MethodResults(
-            status="success",
-            time_ms=[t_gpu * 1e3],
-            results=[],
-            ms_per_cont=[float(t_gpu / n_cont)],
-            errors=[],
-            threads=1,
-        )
-        contingency_results["methods"]["gpu"] = [result]
+        chunks: list[int] = args.gpu_max_chunk
+
+        results=[]
+        for chunk in chunks:
+            mc_note = f", max_chunk={chunk}"
+            print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
+            res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
+            print(
+                f"  polar GPU: {t_gpu:.3f} s total | {t_gpu / n_cont * 1e3:.3f} "
+                f"ms/contingency | converged {n_conv_g}/{n_cont}"
+            )
+            result: MethodResults = MethodResults(
+                status="success",
+                time_ms=[t_gpu * 1e3],
+                results=[],
+                ms_per_cont=[float(t_gpu / n_cont)],
+                errors=[],
+                threads=1,
+            )
+            results.append(result)
+
+        contingency_results["methods"]["gpu"] = results
 
     # CPU vs GPU agreement (both have full result tables here)
     if do_cpp and do_gpu and res_cpp is not None and res_gpu is not None:

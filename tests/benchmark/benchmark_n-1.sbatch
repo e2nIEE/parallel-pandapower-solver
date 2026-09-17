@@ -24,6 +24,7 @@ LIMIT=15000
 
 # Configuration
 CPUS=${CPUS:-"1 2 4 8 16 32 64"}
+GPU_CHUNKS=${GPU_CHUNKS:-"64 128 256 512 1024 2028}
 
 # Load modules and activate conda environment
 module purge
@@ -49,6 +50,7 @@ cd "${p3s_DIR:-$(dirname $(dirname $(readlink -f $0)))}"
 # Test specific method on this case
 ${PYTHONBIN}/bin/python ${BASE_PATH}/tests/benchmark/benchmark_n_1_pegase.py \
     --num-threads $CPUS \
+    --gpu-max-chunk $GPU_CHUNKS \
     --validate 0 \
     --limit $LIMIT \
     --output-dir "$OUTPUT_DIR" \
