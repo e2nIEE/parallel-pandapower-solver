@@ -279,7 +279,7 @@ def _parse_args():
         "--job-id",
         "-j",
         type=str,
-        default=None,
+        default="no-job-id",
         help="Job ID for output file naming",
     )
     return ap.parse_args()
@@ -309,7 +309,7 @@ def main():
 
     contingency_results: BenchmarkResults = BenchmarkResults(
         case=net.name,
-        job_id="",
+        job_id=args.job_id,
         timestamp=datetime.now().isoformat(),
         bus_count=count,
         T_values=[],
@@ -329,12 +329,12 @@ def main():
             print(f"\nRunning p3s CPU batch (nr_klu, threads={thread or 'all'}{chunk_note}) ...")
             res_cpp, t_cpp, n_conv_c, _ = time_p3s(net, thread, chunk=args.chunk)
             print(
-                f"  nr_klu:    {t_cpp:8.3f} s total | {t_cpp / n_cont * 1e3:8.3f} "
+                f"  nr_klu:    {t_cpp:.3f} s total | {t_cpp / n_cont * 1e3:.3f} "
                 f"ms/contingency | converged {n_conv_c}/{n_cont}"
             )
             result: MethodResults = MethodResults(
                 status="success",
-                time_ms=[t_cpp],
+                time_ms=[t_cpp * 1e3],
                 results=[],
                 ms_per_cont=[float(t_cpp / n_cont)],
                 errors=[],
@@ -348,11 +348,16 @@ def main():
         print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
         res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
         print(
-            f"  polar GPU: {t_gpu:8.3f} s total | {t_gpu / n_cont * 1e3:8.3f} "
+            f"  polar GPU: {t_gpu:.3f} s total | {t_gpu / n_cont * 1e3:.3f} "
             f"ms/contingency | converged {n_conv_g}/{n_cont}"
         )
         result: MethodResults = MethodResults(
-            status="success", time_ms=[t_gpu], results=[], ms_per_cont=[float(t_gpu / n_cont)], errors=[], thread=0
+            status="success",
+            time_ms=[t_gpu * 1e3],
+            results=[],
+            ms_per_cont=[float(t_gpu / n_cont)],
+            errors=[],
+            threads=1,
         )
         contingency_results["methods"]["gpu"] = [result]
 
@@ -383,11 +388,6 @@ def main():
     elif args.validate and res_for_val is None:
         print("\n(--validate skipped: --chunk keeps no result table to compare)")
 
-    if args.job_id:
-        contingency_results["job_id"] = args.job_id
-    else:
-        contingency_results["job_id"] = "no_job_id"
-
     if args.output_dir:
         filepath = write_results(contingency_results, args.output_dir)
         print(f"Results written to: {filepath}")
@@ -399,23 +399,22 @@ def main():
     print(f"\nRunning pandapower per-contingency loop ({n_cont} runpp solves; this is the slow part) ...")
     t_pp, n_conv_pp = time_pandapower(net, groups)
     print(
-        f"  pandapower: {t_pp:8.3f} s total | {t_pp / n_cont * 1e3:8.3f} ms/contingency"
-        f" | converged {n_conv_pp}/{n_cont}"
+        f"  pandapower: {t_pp:.3f} s total | {t_pp / n_cont * 1e3:.3f} ms/contingency | converged {n_conv_pp}/{n_cont}"
     )
 
     print("\n" + "=" * 60)
     print(f"  N-1 on case9241pegase: {n_cont} contingencies")
     if t_cpp is not None:
         print(
-            f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:8.2f} s  ({t_pp / t_cpp:5.1f}x vs pandapower)"
+            f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:.2f} s  ({t_pp / t_cpp:.1f}x vs pandapower)"
         )
     if t_gpu is not None:
-        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:8.2f} s  ({t_pp / t_gpu:5.1f}x vs pandapower)")
-    print(f"  pandapower loop:                            {t_pp:8.2f} s")
+        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:.2f} s  ({t_pp / t_gpu:.1f}x vs pandapower)")
+    print(f"  pandapower loop:                            {t_pp:.2f} s")
     print("=" * 60)
 
 
-def write_results(results: BenchmarkResults, output_dir) -> str:
+def write_results(results: BenchmarkResults, output_dir: str | os.PathLike) -> str:
     """Write results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{results['job_id']}_{results['case']}.json"

@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     net = net_with_trafo_characteristic()
     create_continuous_bus_index(net)
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     npf_cuda = NewtonPowerflowCUDA(net)
     npf_cuda.calculate_cuda(net, init="flat")
