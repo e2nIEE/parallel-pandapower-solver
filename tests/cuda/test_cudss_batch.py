@@ -205,3 +205,30 @@ def test_polar_solver_recovers_injected_corruption(monkeypatch):
     assert not np.isnan(r["V"]).any(), "residual NaN after retry"
     assert int((~r["converged"]).sum()) == 0, "columns still unconverged after retry"
     assert np.abs(np.abs(r["V"]) - np.abs(ref)).max() < 1e-6
+
+
+def main():
+    """Run all test cases directly (without pytest)."""
+    import sys
+
+    cases = list(CASE_FUNCS.keys())
+    if len(sys.argv) > 1:
+        cases = [sys.argv[1]]
+
+    # Run test_cudss_batch_matches_scipy for each case
+    for case in cases:
+        print(f"\n=== Testing {case} ===")
+        test_cudss_batch_matches_scipy(case)
+        print(f"✓ {case} passed!")
+
+    # Run large batch tests
+    for T in [1024, 4096]:
+        print(f"\n=== Testing large batch T={T} ===")
+        test_polar_solver_large_batch_no_nan(T)
+        print(f"✓ T={T} passed!")
+
+    print("\n=== All tests passed! ===")
+
+
+if __name__ == "__main__":
+    main()

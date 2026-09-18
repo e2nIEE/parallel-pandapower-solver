@@ -43,3 +43,23 @@ def test_calculate_cuda_matches_runpp(case):
     va_err = np.abs(va - ref.res_bus.va_degree.values).max()
     assert vm_err < 1e-6, f"{case}: vm err {vm_err:.2e}"
     assert va_err < 1e-4, f"{case}: va err {va_err:.2e}"
+
+
+def main():
+    """Run all test cases directly (without pytest)."""
+    import sys
+
+    cases = list(CASE_FUNCS.keys())
+    if len(sys.argv) > 1:
+        cases = [sys.argv[1]]
+
+    for case in cases:
+        print(f"\n=== Testing {case} ===")
+        test_calculate_cuda_matches_runpp(case)
+        print(f"✓ {case} passed!")
+
+    print("\n=== All tests passed! ===")
+
+
+if __name__ == "__main__":
+    main()

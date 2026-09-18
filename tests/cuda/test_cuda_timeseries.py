@@ -68,3 +68,23 @@ def test_timeseries_matches_per_step_runpp(case):
         va_err = np.abs(va_gpu[:, t] - ref.res_bus.va_degree.values).max()
         assert vm_err < 1e-6, f"{case} t={t}: vm err {vm_err:.2e}"
         assert va_err < 1e-4, f"{case} t={t}: va err {va_err:.2e}"
+
+
+def main():
+    """Run all test cases directly (without pytest)."""
+    import sys
+
+    cases = list(CASE_FUNCS.keys())
+    if len(sys.argv) > 1:
+        cases = [sys.argv[1]]
+
+    for case in cases:
+        print(f"\n=== Testing {case} ===")
+        test_timeseries_matches_per_step_runpp(case)
+        print(f"✓ {case} passed!")
+
+    print("\n=== All tests passed! ===")
+
+
+if __name__ == "__main__":
+    main()

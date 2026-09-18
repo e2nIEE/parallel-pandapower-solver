@@ -62,3 +62,23 @@ def test_batch_solve_matches_scipy(case):
         err = np.linalg.norm(x_gpu[i] - x_ref[i], np.inf)
         denom = max(1.0, np.linalg.norm(x_ref[i], np.inf))
         assert err / denom < 1e-6, f"{case} system {i}: rel err {err / denom:.3e}"
+
+
+def main():
+    """Run all test cases directly (without pytest)."""
+    import sys
+
+    cases = list(CASES.keys())
+    if len(sys.argv) > 1:
+        cases = [sys.argv[1]]
+
+    for case in cases:
+        print(f"\n=== Testing {case} ===")
+        test_batch_solve_matches_scipy(case)
+        print(f"✓ {case} passed!")
+
+    print("\n=== All tests passed! ===")
+
+
+if __name__ == "__main__":
+    main()
