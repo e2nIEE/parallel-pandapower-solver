@@ -24,7 +24,7 @@ LIMIT=15000
 
 # Configuration
 CPUS=${CPUS:-"1 2 4 8 16 32 64"}
-GPU_CHUNKS=${GPU_CHUNKS:-"64 128 256 512 1024 2028}
+GPU_CHUNKS=${GPU_CHUNKS:-"64 128 256 512 1024 2028"}
 
 # Load modules and activate conda environment
 module purge
