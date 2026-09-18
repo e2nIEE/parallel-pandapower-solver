@@ -43,3 +43,31 @@ Once you have a copy of the source, you can install it with:
 
     cd parallel-pandapower-solver
     uv pip install .
+
+
+Testing cuda hardware
+---------------------
+
+cuda-toolkit and cuDSS must be available,
+
+.. code-block:: sh
+
+    conda install -c nvidia/label/cuda-13.2.2 cuda-toolkit`
+
+CUDA libraries are not part of this repository and must be acquired separately from NVIDIA, under their respective license terms.
+
+Since many different cuda libraries exist, with different paths and setups, a test script exists:
+
+.. code-block:: sh
+
+    python -m p3s.cuda.check_cudss
+
+this script will check if cudss is actually usable for p3s. Nvidia cuDSS is currently the newest sparse matrix solver,
+available for Nvidia hardware.
+
+.. code-block:: sh
+
+    python -m p3s.cuda.diagnose_gpu
+
+this script allows for in depth analysis if the powerflow solver actually works and that the hardware produces correct results.
+

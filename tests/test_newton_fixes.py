@@ -27,7 +27,7 @@ from pandapower.networks.power_system_test_cases import case9, case14
 from pandapower.run import runpp
 from scipy.sparse.linalg import MatrixRankWarning
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 
@@ -90,7 +90,7 @@ def test_dc_init_preserves_pv_magnitudes(fn):
     voltage-magnitude set-points at PV (gen) buses. Regression for a bug where dc-init
     PV nets converged with |V|=1.0 at gen buses (off by ~0.09 vs runpp)."""
     net = fn()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     ref = copy.deepcopy(net)
     runpp(ref)
 

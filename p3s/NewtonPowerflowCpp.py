@@ -26,21 +26,6 @@ try:
     from p3s import nr_klu  # type: ignore[attr-defined]
 except ImportError:
     from p3s.cpp import nr_klu  # type: ignore[attr-defined]
-    # # Fall back to a standalone build sitting in p3s/cpp/ (e.g. build.sh output).
-    # import os, sys
-    # _cpp_dir = os.path.join(os.path.dirname(__file__), "cpp")
-    # sys.path.insert(0, os.path.abspath(_cpp_dir))
-    # # In-place dev builds (build.sh / CMake) put the .pyd in cpp/Release/
-    # sys.path.insert(0, os.path.join(os.path.abspath(_cpp_dir), "Release"))
-    # try:
-    #     import nr_klu
-    # except ImportError as exc:  # pragma: no cover - depends on build state
-    #     raise ImportError(
-    #         "The compiled C++ solver 'nr_klu' is not available. Install it with "
-    #         "`pip install p3s[cpp]` (or `pip install ./p3s/cpp`), which needs "
-    #         "a C++17 compiler and SuiteSparse/KLU "
-    #         "(e.g. `conda install -c conda-forge suitesparse`)."
-    #     ) from exc
 
 
 class NewtonPowerflow:
@@ -104,7 +89,6 @@ class NewtonPowerflow:
             self._p_shift += trafos.p_shift
 
         if "trafo3w" in net and len(net.trafo3w) > 0:
-            # trafos = PiTransformer3W(net.trafo3w, sn_mva=net.sn_mva)
             trafo3ws = ThreeWindingTransformerModel(
                 net.trafo3w,
                 bus_table=net.bus,
@@ -151,32 +135,21 @@ class NewtonPowerflow:
 
         if "load" in net and len(net["load"]) > 0:
             net.load["_lookup"] = self._lookup[net.load.bus].values.astype(int)
-            # net.load['res_mw'] = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
             res_mw = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
 
-            # _load = net.load.groupby("_lookup").res_mw.sum()
             _load = res_mw.groupby(net.load["_lookup"]).sum()
             sBus = sBus.add(_load, fill_value=0)
-            # pq = net.load["_lookup"].values
 
         if "sgen" in net and len(net["sgen"]) > 0:
             net.sgen["_lookup"] = self._lookup[net.sgen.bus].values.astype(int)
-            # net.sgen['res_mw'] = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.load.scaling * net.load.in_service
             res_mw = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.sgen.scaling * net.sgen.in_service
-            # pq_sgen = net.sgen["_lookup"].values
 
-            # _sgen = -1. * net.sgen.groupby("_lookup").res_mw.sum()
             _sgen = -1.0 * res_mw.groupby(net.sgen["_lookup"]).sum()
             sBus = sBus.add(_sgen, fill_value=0)
 
-            # use union to combine bus id's
-            # pq = np.union1d(pq, pq_sgen)
-
         if "gen" in net and len(net["gen"]) > 0:
             net.gen["_lookup"] = self._lookup[net.gen.bus].values.astype(int)
-            pv = net.gen["_lookup"].values
 
-            # _gen = -1. * net.gen.groupby("_lookup").p_mw.sum() * net.gen.scaling.values * net.gen.in_service.values
             res_mw = net.gen.p_mw * net.gen.scaling * net.gen.in_service
             _gen = -1.0 * res_mw.groupby(net.gen["_lookup"]).sum()
             sBus = sBus.add(_gen, fill_value=0)
@@ -199,7 +172,7 @@ class NewtonPowerflow:
             # and add the vm and va set point to the initial voltage vector
             self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
 
-        self._sBus = -1. * sBus.values / net.sn_mva  # type: ignore[operator]
+        self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
         self.busses = {"ref": ref, "pv": pv, "pq": pq}
 
@@ -226,7 +199,6 @@ class NewtonPowerflow:
             return df
 
         sBus = np.conj(self._YBus * voltage) * voltage * net.sn_mva
-        # self._sBus = (sBus - self._sBus.imag * 1j) * net.sn_mva
 
         # -- calculate bus results --
         vm = np.abs(voltage)
@@ -304,9 +276,6 @@ class NewtonPowerflow:
             res_trafo["pl_mw"].to_numpy(copy=False)[:] = trafo_power_from.real + trafo_power_to.real
             res_trafo["ql_mvar"].to_numpy(copy=False)[:] = trafo_power_from.imag + trafo_power_to.imag
 
-            # loading_percent = np.maximum(trafo_currents_from.values * res_trafo['vm_hv_pu'].values,
-            #                             trafo_currents_to.values * res_trafo['vm_lv_pu'].values)
-
             loading_percent = np.maximum(
                 trafo_currents_from.values * trafos.voltages_from.values * np.sqrt(3),
                 trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
@@ -331,10 +300,6 @@ class NewtonPowerflow:
         # equal split: divide each bus's Q by the number of gens on it
         gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
         res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
-        # res_gen['q_mvar'].to_numpy(copy=False)[:] = -1 * gen_bus.q_mvar.to_numpy(copy=False) - \
-        #   self._sBus[self.pf_objects['PVPQ']._pv].imag * net.sn_mva
-
-        # gen_q_mvar = SBus.imag * net.sn_mva #+ bus[gbus, QD]
 
         # -- calculate ext_grid results --
         net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
@@ -447,7 +412,6 @@ class NewtonPowerflow:
         pv_i = np.ascontiguousarray(pv, dtype=np.int32)
         pq_i = np.ascontiguousarray(pq, dtype=np.int32)
         Sbus = np.ascontiguousarray(self._sBus, dtype=np.complex128)
-        # V0 = np.ascontiguousarray(voltage, dtype=np.complex128)
 
         # Build (or reuse) the cached solver. The KLU symbolic analyze depends
         # only on the topology (Yp/Yj/pv/pq), so it is done once and reused while
@@ -550,11 +514,11 @@ class NewtonPowerflow:
         pv_i = np.ascontiguousarray(self.busses["pv"], dtype=np.int32)
         pq_i = np.ascontiguousarray(self.busses["pq"], dtype=np.int32)
 
-        if not Yp.flags.c_contiguous or not Yp.dtype == np.int32:
+        if not Yp.flags.c_contiguous or Yp.dtype != np.int32:
             Yp = np.ascontiguousarray(Yp, dtype=np.int32)
-        if not Yj.flags.c_contiguous or not Yj.dtype == np.int32:
+        if not Yj.flags.c_contiguous or Yj.dtype != np.int32:
             Yj = np.ascontiguousarray(Yj, dtype=np.int32)
-        if not Yx.flags.c_contiguous or not Yx.dtype == np.complex128:
+        if not Yx.flags.c_contiguous or Yx.dtype != np.complex128:
             Yx = np.ascontiguousarray(Yx, dtype=np.complex128)
 
         nnz = Yj.shape[0]
@@ -588,4 +552,4 @@ class NewtonPowerflow:
             raise LoadflowNotConverged(
                 f"C++ batch did not converge for {n_bad} of {T} time steps in {max_iterations} iterations."
             )
-        return result["V"]  # (n_bus, T)
+        return result["V"]

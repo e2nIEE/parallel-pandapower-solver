@@ -457,7 +457,7 @@ class ContingencyCaseGenerator:
         a = np.minimum(f, t)
         b = np.maximum(f, t)
         key = a.astype(np.int64) * n + b
-        uniq, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
+        _, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
         mult = counts[inv]  # per-branch multiplicity
         # Build the simple graph (unique edges) and find bridges via DFS low-link.
         bridges_pair = _find_bridges(n, a[mult == 1], b[mult == 1])
@@ -508,7 +508,6 @@ class ContingencyCaseGenerator:
 
         # --- connectivity: only bridge / multi-branch groups can island ---
         bridges = self._base_bridges()
-        # all_served = np.ones(n, dtype=bool)
         # default reference for every bus in the fully-connected case
         base_served, base_ref, _ = self._resolve_references(np.zeros(n, dtype=np.int64), 1)
 

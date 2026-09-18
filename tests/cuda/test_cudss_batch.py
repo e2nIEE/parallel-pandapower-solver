@@ -15,17 +15,18 @@ installed) to exercise it.
 """
 
 import numpy as np
-import pycuda.driver as cuda
 import pytest
 from pandapower.networks import case14, case118
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 pytest.importorskip("pycuda", reason="pycuda not installed")
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
+
+import pycuda.driver as cuda    # noqa: E402
 
 # GPU + libcudss must both be present, else skip the module.
 try:
@@ -72,7 +73,7 @@ def _jacobian(net):
 @pytest.mark.parametrize("case", list(CASE_FUNCS))
 def test_cudss_batch_matches_scipy(case):
     net = CASE_FUNCS[case]()
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     J = _jacobian(net)
     Jp, Jj, Jx = J.indptr.astype(np.int32), J.indices.astype(np.int32), J.data.astype(np.float64)
     n = J.shape[0]
@@ -128,7 +129,7 @@ def test_polar_solver_large_batch_no_nan(T):
 
     net = case14()
     net.trafo.shift_degree = 0.0
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     rng = np.random.default_rng(0)
     n_load = len(net.load)
@@ -168,7 +169,7 @@ def test_polar_solver_recovers_injected_corruption(monkeypatch):
 
     net = case14()
     net.trafo.shift_degree = 0.0
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
     T = 1024
     rng = np.random.default_rng(0)
     n_load = len(net.load)
@@ -204,9 +205,3 @@ def test_polar_solver_recovers_injected_corruption(monkeypatch):
     assert not np.isnan(r["V"]).any(), "residual NaN after retry"
     assert int((~r["converged"]).sum()) == 0, "columns still unconverged after retry"
     assert np.abs(np.abs(r["V"]) - np.abs(ref)).max() < 1e-6
-
-
-if __name__ == "__main__":
-    for c in CASE_FUNCS:
-        test_cudss_batch_matches_scipy(c)
-        print(f"{c}: OK")

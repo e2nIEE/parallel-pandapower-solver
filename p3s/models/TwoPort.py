@@ -26,10 +26,6 @@ class TwoPort:
         self.yt_matrix: sparse | None = None
 
         self.y_dc_matrix: sparse | None = None
-        # TODO: decide if a branch directional dc powerflow is needed.
-        self.yf_dc_matrix: sparse | None = None
-        self.yt_dc_matrix: sparse | None = None
-
         self._n_bus: int | None = None
 
     def _apply_in_service(self, element_table) -> NDArray:

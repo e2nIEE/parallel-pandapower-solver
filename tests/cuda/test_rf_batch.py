@@ -16,7 +16,9 @@ from pandapower.networks import case9, case14, case118, case9241pegase
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
-from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+pytest.importorskip("pycuda.driver", reason="pycuda is not installed")
+
+from p3s.cuda.cusolver_rf_batch import CusolverRfBatch  # noqa: E402
 
 CASES = {"case9": case9(), "case14": case14(), "case118": case118(), "case9241": case9241pegase()}
 
@@ -60,12 +62,3 @@ def test_batch_solve_matches_scipy(case):
         err = np.linalg.norm(x_gpu[i] - x_ref[i], np.inf)
         denom = max(1.0, np.linalg.norm(x_ref[i], np.inf))
         assert err / denom < 1e-6, f"{case} system {i}: rel err {err / denom:.3e}"
-
-
-if __name__ == "__main__":
-    import sys
-
-    cases = sys.argv[1:] or CASES
-    for c in cases:
-        test_batch_solve_matches_scipy(c)
-        print(f"{c}: OK")
