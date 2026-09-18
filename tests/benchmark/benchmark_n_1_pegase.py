@@ -351,7 +351,7 @@ def main():
         for chunk in chunks:
             mc_note = f", max_chunk={chunk}"
             print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
-            res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
+            res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=chunk, backend=args.gpu_backend)
             print(
                 f"  polar GPU: {t_gpu:.3f} s total | {t_gpu / n_cont * 1e3:.3f} "
                 f"ms/contingency | converged {n_conv_g}/{n_cont}"
@@ -416,7 +416,7 @@ def main():
             f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:.2f} s  ({t_pp / t_cpp:.1f}x vs pandapower)"
         )
     if t_gpu is not None:
-        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:.2f} s  ({t_pp / t_gpu:.1f}x vs pandapower)")
+        print(f"  p3s GPU (polar {args.gpu_backend}):            {t_gpu:.2f} s  ({t_pp / t_gpu:.1f}x vs pandapower)")
     print(f"  pandapower loop:                            {t_pp:.2f} s")
     print("=" * 60)
 

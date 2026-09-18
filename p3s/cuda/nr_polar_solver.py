@@ -75,8 +75,8 @@ class PolarNewtonSolverCUDA:
         self._numeric_boost = 0.0
         # Optional hard cap on the per-chunk batch size, independent of the memory budget.
         # The batched cuSolverRf refactor+solve amortizes per-column cost only up to a
-        # GPU-dependent sweet spot, then gets WORSE (on the RTX A500, ~B=128; profiled in
-        # Phase C). Past that, more columns per chunk cost more per column, so cap here.
+        # GPU-dependent sweet spot, then gets WORSE (on the RTX A500, ~B=128; Past that,
+        # more columns per chunk cost more per column, so cap here.
         # None = memory-budget only (right for big GPUs where the sweet spot is large).
         self.max_chunk: int | None = None
         # Correctness cap for the cuDSS uniform batch: cuDSS 0.8.0's UBATCH SOLVE
