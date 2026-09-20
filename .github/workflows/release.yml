@@ -1,11 +1,7 @@
-# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 # This workflow will create a Python package and upload it to testPyPi or PyPi
 # Then, it installs pandapower from there and all dependencies and runs tests with different Python versions
 
-name: upload
+name: release
 
 # Controls when the action will run.
 on:
@@ -54,8 +50,6 @@ jobs:
           # Upgrade pip
           python3 -m pip install --upgrade pip
           # Install twine
-          sudo apt-get update
-          sudo apt-get install -y libsuitesparse-dev
           python3 -m pip install build setuptools wheel twine
           python3 -m build
 
@@ -67,33 +61,8 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           verbose: true
           skip-existing: true
-        #run: |
-        #  python3 -m build
-        #  python3 -m twine check dist/* --strict
-        #  python3 -m twine upload dist/*
-        #env:
-        #  TWINE_USERNAME: __token__
-        #  TWINE_PASSWORD: ${{ secrets.TESTPYPI }}
-        #  TWINE_REPOSITORY: testpypi
 
       # Upload to PyPI
       - name: Build and Upload to PyPI
         if: ${{ inputs.upload_server == 'pypi' }}
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e #release/v1
-        #with:
-        #  repository-url: https://upload.pypi.org/legacy/
-        #run: |
-        #  python3 -m build
-        #  python3 -m twine check dist/* --strict
-        #  python3 -m twine upload dist/*
-        #env:
-        #  TWINE_USERNAME: __token__
-        #  TWINE_PASSWORD: ${{ secrets.PYPI }}
-        #  TWINE_REPOSITORY: pypi
-
-      # Run an installation for testing
-      - name: Install p3s from PyPI
-        if: ${{ inputs.upload_server == 'pypi' }}
-        run: |
-          python3 -m pip install --pre p3s
-          python3 -c "import p3s; print(p3s.__version__)"
