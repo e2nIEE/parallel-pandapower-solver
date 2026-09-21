@@ -17,7 +17,10 @@ from pandapower import runpp
 from pandapower.networks import case9, case14
 
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
-from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
+
+pytest.importorskip("pycuda", reason="pycuda not installed")
+
+from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA  # noqa: E402
 
 CASE_FUNCS = {"case9": case9, "case14": case14}
 
@@ -65,9 +68,3 @@ def test_timeseries_matches_per_step_runpp(case):
         va_err = np.abs(va_gpu[:, t] - ref.res_bus.va_degree.values).max()
         assert vm_err < 1e-6, f"{case} t={t}: vm err {vm_err:.2e}"
         assert va_err < 1e-4, f"{case} t={t}: va err {va_err:.2e}"
-
-
-if __name__ == "__main__":
-    for c in CASE_FUNCS:
-        test_timeseries_matches_per_step_runpp(c)
-        print(f"{c}: OK")

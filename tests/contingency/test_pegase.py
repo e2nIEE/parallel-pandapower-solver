@@ -155,9 +155,3 @@ def test_pegase_speedup_vs_pandapower(pegase_bench_net):
     # Sanity floor only -- the real number is in the printout; keep the assert loose so
     # the test does not flake on a busy CI host.
     assert speedup > 5.0, f"expected a large speedup, got {speedup:.1f}x"
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v", "-s"]))

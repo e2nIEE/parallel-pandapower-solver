@@ -26,9 +26,13 @@ class TwoWindingTransformerModel(TwoPort):
         self.voltages_from = bus_table.loc[self._from_bus, "vn_kv"]
         self.voltages_to = bus_table.loc[self._to_bus, "vn_kv"]
 
-        # Fetch voltage levels
+        # TODO: calc ratio based on voltage levels
         # hv_kv = bus_table.loc[self._from_bus, 'vn_kv'].values
         # lv_kv = bus_table.loc[self._to_bus, 'vn_kv'].values
+        # lv_voltage = trafo_table["vn_lv_kv"].values
+        # hv_voltage = trafo_table["vn_hv_kv"].values
+        # a_ratio = hv_voltage / lv_voltage
+        # v_base  = lv_voltage ** 2
 
         # Input Values
         tap_pos = trafo_table["tap_pos"].fillna(0.0).astype(int).values
@@ -40,16 +44,12 @@ class TwoWindingTransformerModel(TwoPort):
             pd.MultiIndex.from_tuples(list(zip(id_characteristic_table, tap_pos, strict=False)))
         )
 
-        # vk_percent = trafo_table["vk_percent"].values
         vk_percent = tap_table["vk_percent"].to_numpy()[tap_row]
-        # vkr_percent = trafo_table["vkr_percent"].values
         vkr_percent = tap_table["vkr_percent"].to_numpy()[tap_row]
 
         trafo_sn_mva = trafo_table["sn_mva"].values
         i0_percent = trafo_table["i0_percent"].values
         pfe_mw = trafo_table["pfe_kw"].values / 1000.0
-        # lv_voltage = trafo_table["vn_lv_kv"].values
-        # hv_voltage = trafo_table["vn_hv_kv"].values
 
         # tap changer
         angle_deg = tap_table["angle_deg"].to_numpy()[tap_row]
@@ -79,37 +79,23 @@ class TwoWindingTransformerModel(TwoPort):
             a = np.where(tap_side2 == "hv", N, a)
             b = np.where(tap_side2 == "lv", N, b)
 
-        # ratio
-        # a_ratio = hv_voltage / lv_voltage
-        # v_base  = lv_voltage ** 2
-
         # impedance values
         sn_mva_scaled = sn_mva / trafo_sn_mva
-        # sn_mva_scaled2 = sn_mva * sn_mva_scaled
-
-        # z_n = lv_kv ** 2 / sn_mva
-        # z_ref = lv_voltage**2 * sn_mva_scaled
-
         z_sc = vk_percent / 100.0 * sn_mva_scaled
         r_sc = vkr_percent / 100.0 * sn_mva_scaled
+
         # Preserve the sign of the short-circuit impedance: vk_percent (hence z_sc) can be
         # NEGATIVE for some equivalent transformers (e.g. RTE/Polish grids), which encodes a
         # capacitive/negative reactance. A bare sqrt drops that sign and yields +x, which
         # conjugates the whole trafo admittance and breaks convergence. Match pandapower's
         # _calc_r_x_from_dataframe: x_sc = sign(z_sc) * sqrt(z_sc**2 - r_sc**2).
         x_sc = np.sign(z_sc) * np.sqrt(z_sc**2 - r_sc**2)
-        z_k = r_sc + 1j * x_sc  # * sn_mva_scaled2 # * z_n / z_ref
+        z_k = r_sc + 1j * x_sc
 
         # magnetising admittance
         i_0 = i0_percent / 100.0 * trafo_sn_mva
         # iron losses are the real part of the admittance
         g_m = pfe_mw / sn_mva
-
-        # the voltage change and the iron losses together form the imaginary part
-        # b_m = -np.sqrt(i_0 ** 2 - g_m ** 2) / sn_mva
-        # b_m = i_0 * sn_mva / v_base
-        # b_m = np.sqrt(np.square(i_0) - np.square(pfe_mw)) / sn_mva
-        # b_m[np.isnan(b_m)] = 0
 
         # when i_0 is not set / or zero, we can just use zero as a value, since the sqrt would be nan
         b_m_squared = np.square(i_0) - np.square(pfe_mw)

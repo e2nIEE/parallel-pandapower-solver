@@ -49,28 +49,29 @@ def _load_cuda_lib(stem: str):
             f"Add $CUDA_HOME/lib64 to LD_LIBRARY_PATH. Last error: {last_err}"
         )
 
-    # Windows: try the bare loader first (works if the toolkit bin is on PATH),
-    # then fall back to globbing known toolkit install locations. Prefer the
-    # highest version found (sorted last).
-    search_dirs = []
-    cuda_path = os.environ.get("CUDA_PATH")
-    if cuda_path and os.path.isdir(cuda_path):
-        search_dirs.append(cuda_path)
-    search_dirs.append(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
+    else:
+        # Windows: try the bare loader first (works if the toolkit bin is on PATH),
+        # then fall back to globbing known toolkit install locations. Prefer the
+        # highest version found (sorted last).
+        search_dirs = []
+        cuda_path = os.environ.get("CUDA_PATH")
+        if cuda_path and os.path.isdir(cuda_path):
+            search_dirs.append(cuda_path)
+        search_dirs.append(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
 
-    candidates = []
-    for base in search_dirs:
-        if base and os.path.isdir(base):
-            candidates += glob.glob(os.path.join(base, "**", f"{stem}64_*.dll"), recursive=True)
+        candidates = []
+        for base in search_dirs:
+            if base and os.path.isdir(base):
+                candidates += glob.glob(os.path.join(base, "**", f"{stem}64_*.dll"), recursive=True)
 
-    for dll in sorted(set(candidates)):
-        try:
-            return ctypes.WinDLL(dll)
-        except OSError:
-            continue
+        for dll in sorted(set(candidates)):
+            try:
+                return ctypes.WinDLL(dll)
+            except OSError:
+                continue
 
-    # Last resort: let the OS resolver try (relies on PATH).
-    return ctypes.WinDLL(f"{stem}64_12.dll")
+        # Last resort: let the OS resolver try (relies on PATH).
+        return ctypes.WinDLL(f"{stem}64_12.dll")
 
 
 # cuSparse

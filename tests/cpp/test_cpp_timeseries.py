@@ -61,10 +61,3 @@ def test_cpp_timeseries_matches_runpp(case, n_threads):
         va_err = np.abs(va_gpu[:, t] - ref.res_bus.va_degree.values).max()
         assert vm_err < 1e-6, f"{case} t={t} nt={n_threads}: vm err {vm_err:.2e}"
         assert va_err < 1e-4, f"{case} t={t} nt={n_threads}: va err {va_err:.2e}"
-
-
-if __name__ == "__main__":
-    for c in CASE_FUNCS:
-        for nt in (1, 0):
-            test_cpp_timeseries_matches_runpp(c, nt)
-            print(f"{c} (n_threads={nt}): OK")

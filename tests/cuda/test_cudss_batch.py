@@ -15,7 +15,6 @@ installed) to exercise it.
 """
 
 import numpy as np
-import pycuda.driver as cuda
 import pytest
 from pandapower.networks import case14, case118
 from scipy.sparse import csr_matrix
@@ -26,6 +25,8 @@ from p3s.NewtonPowerflow import NewtonPowerflow
 
 pytest.importorskip("pycuda", reason="pycuda not installed")
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
+
+import pycuda.driver as cuda    # noqa: E402
 
 # GPU + libcudss must both be present, else skip the module.
 try:
@@ -204,9 +205,3 @@ def test_polar_solver_recovers_injected_corruption(monkeypatch):
     assert not np.isnan(r["V"]).any(), "residual NaN after retry"
     assert int((~r["converged"]).sum()) == 0, "columns still unconverged after retry"
     assert np.abs(np.abs(r["V"]) - np.abs(ref)).max() < 1e-6
-
-
-if __name__ == "__main__":
-    for c in CASE_FUNCS:
-        test_cudss_batch_matches_scipy(c)
-        print(f"{c}: OK")

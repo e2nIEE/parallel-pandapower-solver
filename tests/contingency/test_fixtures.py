@@ -116,9 +116,3 @@ def test_ungrouped_branches_are_never_taken_out():
     grouped = net.line["outage_group"].dropna().unique().tolist()
     assert set(grouped) == {"core", "spur"}
     assert set(enumerate_contingencies(net)) == {"core", "spur"}
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v"]))

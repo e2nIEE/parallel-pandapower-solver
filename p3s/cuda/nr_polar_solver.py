@@ -551,7 +551,7 @@ class PolarNewtonSolverCUDA:
         bs = 256
 
         def grid(total):
-            return ((total + bs - 1) // bs, 1, 1)
+            return (total + bs - 1) // bs, 1, 1
 
         g_bn = grid(B * n)
         g_bJ = grid(B * t.nnzJ)

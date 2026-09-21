@@ -5,6 +5,7 @@
 """Main module."""
 
 import copy
+import os
 from time import time
 
 import pandas as pd
@@ -33,6 +34,15 @@ from pandapower.toolbox.data_modification import create_continuous_bus_index
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 from p3s.NewtonPowerflow import NewtonPowerflow
+
+_HAS_CUDA = False
+if os.environ.get("P3S_BENCH_CUDA") == "1":
+    try:
+        from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
+
+        _HAS_CUDA = True
+    except (ImportError, FileNotFoundError):
+        _HAS_CUDA = False
 
 
 def net_with_trafo_characteristic() -> pandapowerNet:
@@ -72,10 +82,6 @@ def net_with_trafo_characteristic() -> pandapowerNet:
 if __name__ == "__main__":
     N = 100
 
-    pd.set_option("display.max_rows", 1000)
-    pd.set_option("display.max_columns", 1000)
-    pd.set_option("display.width", 1000)
-
     net = net_with_trafo_characteristic()
     create_continuous_bus_index(net)
     calculate_trafo_characteristic(net, inplace=True)
@@ -114,12 +120,17 @@ if __name__ == "__main__":
         if len(net["trafo"]) > 0 and "trafo_characteristic_table" not in net:
             calculate_trafo_characteristic(net, inplace=True)
 
-        cu_start_time = time()
-        npf_cuda = NewtonPowerflowCUDA(net)
-        cuda_iter = -1
-        for _ in range(N):
-            _, cuda_iter = npf_cuda.calculate_cuda(net, init="flat", max_iterations=100, tolerance=1e-5)
-        cu_end_time = time()
+        if _HAS_CUDA:
+            cu_start_time = time()
+            npf_cuda = NewtonPowerflowCUDA(net)
+            cuda_iter = -1
+            for _ in range(N):
+                _, cuda_iter = npf_cuda.calculate_cuda(net, init="flat", max_iterations=100, tolerance=1e-5)
+            cu_end_time = time()
+        else:
+            cu_start_time = time()
+            cu_end_time = cu_start_time
+            cuda_iter = 0
 
         p3s_start_time = time()
         npf = NewtonPowerflow(net)

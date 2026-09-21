@@ -143,36 +143,37 @@ def _load_cudss():
                 last = e
         raise OSError(f"could not load cudss DLL (tried {cands}). Last error: {last}")
 
-    # Linux: pip wheel dir, then LD_LIBRARY_PATH, then bare versioned names.
-    cands = []
-    try:
-        import site
-
-        bases = list(site.getsitepackages())
+    else:
+        # Linux: pip wheel dir, then LD_LIBRARY_PATH, then bare versioned names.
+        cands = []
         try:
-            bases.append(site.getusersitepackages())
+            import site
+
+            bases = list(site.getsitepackages())
+            try:
+                bases.append(site.getusersitepackages())
+            except Exception:
+                pass
+            for b in bases:
+                cands += glob.glob(os.path.join(b, "nvidia", "**", "libcudss.so*"), recursive=True)
         except Exception:
             pass
-        for b in bases:
-            cands += glob.glob(os.path.join(b, "nvidia", "**", "libcudss.so*"), recursive=True)
-    except Exception:
-        pass
-    for d in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
-        if d:
-            cands += glob.glob(os.path.join(d, "libcudss.so*"))
-    # prefer versioned real files (sorted desc), then bare names via the loader path
-    cands = sorted(set(cands), reverse=True) + ["libcudss.so", "libcudss.so.0"]
-    last = None
-    for c in cands:
-        try:
-            return ctypes.CDLL(c, mode=ctypes.RTLD_GLOBAL)
-        except OSError as e:
-            last = e
-    raise OSError(
-        f"could not load libcudss.so (tried {cands}). "
-        f"pip install nvidia-cudss-cu12 and/or add its lib dir to LD_LIBRARY_PATH. "
-        f"Last error: {last}"
-    )
+        for d in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
+            if d:
+                cands += glob.glob(os.path.join(d, "libcudss.so*"))
+        # prefer versioned real files (sorted desc), then bare names via the loader path
+        cands = sorted(set(cands), reverse=True) + ["libcudss.so", "libcudss.so.0"]
+        last = None
+        for c in cands:
+            try:
+                return ctypes.CDLL(c, mode=ctypes.RTLD_GLOBAL)
+            except OSError as e:
+                last = e
+        raise OSError(
+            f"could not load libcudss.so (tried {cands}). "
+            f"pip install nvidia-cudss-cu12 and/or add its lib dir to LD_LIBRARY_PATH. "
+            f"Last error: {last}"
+        )
 
 
 _libcudss = _load_cudss()

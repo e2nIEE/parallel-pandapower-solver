@@ -89,9 +89,3 @@ def test_threads_give_identical_results():
     m = ~np.isnan(r1.V)
     assert np.allclose(r1.V[m], r0.V[m], atol=1e-10)
     assert np.array_equal(r1.converged, r0.converged)
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v"]))

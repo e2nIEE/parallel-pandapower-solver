@@ -24,11 +24,6 @@ class ThreePort:
         self._n_bus: int | None = None
 
     def create_y_matrix(self, n_bus: int = -1) -> sparse:
-        # if self.y_matrix and n_bus == self._n_bus:
-        #    return self.y_matrix
-
-        # if nbus == -1:
-        #    nbus = max(max(self.hv_bus), max(self.mv_bus), max(self.lv_bus)) + 1
 
         self._n_bus = n_bus
         rows, cols, data = [], [], []
@@ -54,5 +49,4 @@ class ThreePort:
             data += [y11, y12, y13, y21, y22, y23, y31, y32, y33]
 
         self.y_matrix = sparse((data, (rows, cols)), shape=(n_bus, n_bus), dtype=complex)
-        print("DEBUG ThreePort Y-matrix nnz:", self.y_matrix.nnz)
         return self.y_matrix
