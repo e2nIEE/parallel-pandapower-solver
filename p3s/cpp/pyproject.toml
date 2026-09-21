@@ -19,7 +19,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "p3s-cpp"
-version = "1.0.0"
+version = "1.0.1"
 description = "Compiled C++/KLU Newton-Raphson power-flow extension for p3s (nr_klu)"
 readme = "README.md"
 authors = [

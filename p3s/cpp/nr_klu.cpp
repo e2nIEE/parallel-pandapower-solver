@@ -276,13 +276,29 @@ static void eval_F_and_J(const Topology& w, SolveState& st, const double* Vm, co
     const double* Ym = st.Ym.empty() ? w.Ym.data() : st.Ym.data();
     const double* Ya = st.Ya.empty() ? w.Ya.data() : st.Ya.data();
     static thread_local std::vector<double> buf, Pcalc, Qcalc;
-    buf.assign(4 * nnzY, 0.0);
+    // Only GROW the buffers; do not zero-fill them. Every off-diagonal slot is assigned
+    // unconditionally in the loop below (dP_dVa[k] = ... for row != col), and Pcalc/Qcalc
+    // are written from the prow/qrow locals, so a blanket assign(4*nnzY, 0.0) was a dead
+    // ~1.2 MB memset per iteration on pegase (4 * 37655 * 8 B). The ONLY slots that
+    // accumulate (+=/-=) rather than being assigned are the four diagonals [dix], so
+    // those -- and only those -- are cleared, below.
+    if (buf.size() < (size_t)4 * nnzY) buf.resize((size_t)4 * nnzY);
     double* dP_dVa = buf.data();
     double* dQ_dVa = buf.data() + nnzY;
     double* dP_dVm = buf.data() + 2 * nnzY;
     double* dQ_dVm = buf.data() + 3 * nnzY;
-    Pcalc.assign(w.n, 0.0);
-    Qcalc.assign(w.n, 0.0);
+    if ((int)Pcalc.size() < w.n) { Pcalc.resize(w.n); Qcalc.resize(w.n); }
+
+    // Clear the accumulator slots (the per-row Ybus diagonal). Ydiag[row] is -1 only if a
+    // row has no diagonal entry, which cannot happen for a real Ybus -- the loop below
+    // already indexes buf[dix] unconditionally -- but guard anyway so a malformed input
+    // degrades to a wrong answer rather than a stray write.
+    for (int row = 0; row < w.n; ++row) {
+        const int dix = w.Ydiag[row];
+        if (dix < 0) continue;
+        dP_dVa[dix] = 0.0; dQ_dVa[dix] = 0.0;
+        dP_dVm[dix] = 0.0; dQ_dVm[dix] = 0.0;
+    }
 
     for (int row = 0; row < w.n; ++row) {
         const int dix = w.Ydiag[row];
