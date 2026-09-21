@@ -117,6 +117,6 @@ def dc_initial_voltage(pf) -> NDArray:
 
     # Sanity fallback: reject a non-physical DC start (p3s's DC model at scale).
     max_angle_deg = np.abs(np.degrees(np.angle(voltage))).max()
-    if not np.isfinite(max_angle_deg): # or max_angle_deg > _DC_ANGLE_SANITY_DEG:
+    if not np.isfinite(max_angle_deg):  # or max_angle_deg > _DC_ANGLE_SANITY_DEG:
         return flat
     return voltage
