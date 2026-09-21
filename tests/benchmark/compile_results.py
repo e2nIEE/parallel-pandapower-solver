@@ -708,7 +708,6 @@ def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
         ax2.set_xlabel("Thread count")
         ax2.set_xticks(threads_count)
 
-
         plt.ylabel("time (s)")
         plt.title("Times for n-1 Contingency Analysis on CPU vs GPU")
 
@@ -720,6 +719,7 @@ def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
             dpi=150,
         )
         plt.close()
+
 
 def compile_results(
     output_dir,

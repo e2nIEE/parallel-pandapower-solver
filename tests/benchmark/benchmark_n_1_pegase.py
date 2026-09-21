@@ -257,7 +257,7 @@ def _parse_args():
     ap.add_argument(
         "--gpu-max-chunk",
         type=int,
-        nargs='+',
+        nargs="+",
         default=[512],
         help="GPU: cap the per-chunk batch size (default: memory-budget only). "
         "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
@@ -343,7 +343,7 @@ def main():
                 ms_per_cont=[float(t_cpp / n_cont)],
                 errors=[],
                 threads=thread,
-                chunk_size=args.chunk if args.chunk else None
+                chunk_size=args.chunk if args.chunk else None,
             )
             results.append(result)
         contingency_results["methods"]["cpp"] = results
@@ -351,7 +351,7 @@ def main():
     if do_gpu:
         chunks: list[int] = args.gpu_max_chunk
 
-        results=[]
+        results = []
         for chunk in chunks:
             mc_note = f", max_chunk={chunk}"
             print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
@@ -367,7 +367,7 @@ def main():
                 ms_per_cont=[float(t_gpu / n_cont)],
                 errors=[],
                 threads=1,
-                chunk_size=chunk
+                chunk_size=chunk,
             )
             results.append(result)
 
