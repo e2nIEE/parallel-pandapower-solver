@@ -68,6 +68,7 @@ class MethodResults(TypedDict):
     ms_per_cont: list[float | int | None]
     errors: list[Exception]
     threads: int | None
+    chunk_size: int | None
 
 
 class BenchmarkResults(TypedDict):
@@ -86,6 +87,8 @@ def build_net(limit: int | None = None):
     become contingencies; the rest stay in service (no outage_group).
     """
     net = case9241pegase()
+    if "name" not in net or not net.name:
+        net.name = "case9241pegase"
     calculate_trafo_characteristic(net, inplace=True)
     net.line["outage_group"] = None
     net.trafo["outage_group"] = None
@@ -340,6 +343,7 @@ def main():
                 ms_per_cont=[float(t_cpp / n_cont)],
                 errors=[],
                 threads=thread,
+                chunk_size=args.chunk if args.chunk else None
             )
             results.append(result)
         contingency_results["methods"]["cpp"] = results
@@ -363,6 +367,7 @@ def main():
                 ms_per_cont=[float(t_gpu / n_cont)],
                 errors=[],
                 threads=1,
+                chunk_size=chunk
             )
             results.append(result)
 
@@ -425,6 +430,8 @@ def write_results(results: BenchmarkResults, output_dir: str | os.PathLike) -> s
     """Write results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{results['job_id']}_{results['case']}.json"
+    print(f"Writing results to {filename}")
+    print(results.keys(), results["job_id"], results["case"])
     filepath_ = os.path.join(output_dir, filename)
 
     with open(filepath_, "w") as f:

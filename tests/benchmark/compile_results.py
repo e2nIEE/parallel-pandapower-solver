@@ -607,29 +607,20 @@ def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
 
     plt.figure(figsize=(18, 8))
 
-    for method in sorted(methods_in_data):
+    if "cpp" in methods_in_data:
         threads_count: list[int] = []
         time_list: list[float] = []
-        # per_list: list[float ] = []
-        for md in results["methods"][method]:
+        for md in results["methods"]["cpp"]:
             threads_count.append(md["threads"])
-            time_list.append(md["time_ms"][0] / 10)
-            # per_list.append(md["ms_per_cont"][0] / 10)
+            time_list.append(md["time_ms"][0] / 1000)
 
-        color = color_map[method]
+        color = color_map["cpp"]
         plt.plot(
             threads_count,
             time_list,
             marker="o",
             color=color,
         )
-        # color_per = color_map[f"{method}_per"]
-        # plt.plot(
-        #     threads_count,
-        #     per_list,
-        #     marker="o",
-        #     color=color_per,
-        # )
 
         plt.xlabel("Thread count")
         plt.xticks(threads_count)
@@ -648,6 +639,87 @@ def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
         )
         plt.close()
 
+    if "gpu" in methods_in_data:
+        plt.figure(figsize=(18, 8))
+        chunk_sizes: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["gpu"]:
+            chunk_sizes.append(md["chunk_size"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["gpu"]
+        plt.plot(
+            chunk_sizes,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        plt.xlabel("Chunk Size")
+        plt.xticks(chunk_sizes)
+        plt.ylabel("time (s)")
+        plt.title("Time vs Chunk Size for n-1 Contingency Analysis on GPU")
+
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=0.5)
+        plt.savefig(
+            output_path / "n-1_chunks.png",
+            dpi=150,
+        )
+        plt.close()
+
+    if "cpp" in methods_in_data and "gpu" in methods_in_data:
+        fig, ax1 = plt.subplots(figsize=(18, 8))
+
+        chunk_sizes: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["gpu"]:
+            chunk_sizes.append(md["chunk_size"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["gpu"]
+        ax1.plot(
+            chunk_sizes,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        ax1.set_xlabel("Chunk Size")
+        ax1.set_xticks(chunk_sizes)
+
+        ax2 = ax1.twiny()
+
+        threads_count: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["cpp"]:
+            threads_count.append(md["threads"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["cpp"]
+        ax2.plot(
+            threads_count,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        ax2.set_xlabel("Thread count")
+        ax2.set_xticks(threads_count)
+
+
+        plt.ylabel("time (s)")
+        plt.title("Times for n-1 Contingency Analysis on CPU vs GPU")
+
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=0.5)
+        plt.savefig(
+            output_path / "n-1_both.png",
+            dpi=150,
+        )
+        plt.close()
 
 def compile_results(
     output_dir,

@@ -24,7 +24,7 @@ LIMIT=15000
 
 # Configuration
 CPUS=${CPUS:-"1 2 4 8 16 32 64"}
-GPU_CHUNKS=${GPU_CHUNKS:-"64 128 256 512 1024 2028"}
+GPU_CHUNKS=${GPU_CHUNKS:-"128 256 512 1024 2028"}
 
 # Load modules and activate conda environment
 module purge
@@ -54,7 +54,7 @@ ${PYTHONBIN}/bin/python ${BASE_PATH}/tests/benchmark/benchmark_n_1_pegase.py \
     --validate 0 \
     --limit $LIMIT \
     --output-dir "$OUTPUT_DIR" \
-    --job-id "$SLURM_ARRAY_JOB_ID" || EXIT_CODE=$?
+    --job-id "$SLURM_JOB_ID" || EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
     echo "=== Failed processing case: "case9241pegase" with ${CPU} cores ==="
