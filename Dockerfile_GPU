@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
 FROM nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
