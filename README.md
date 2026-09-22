@@ -61,6 +61,12 @@ From a source checkout, p3s-cpp is not on an index, so build it explicitly:
 
 Look into docs/installation.md for more details.
 
+## Acknowledgment
+
+The code in this repository was created as part of the research project “GRAVITON”, supported by the German Federal Ministry for Economic Affairs and Climate Action (BMWE) on the basis of a decision by the German Bundestag (grant no. 03EIM4109).
+
+<img src="https://github.com/e2nIEE/parallel-pandapower-solver/blob/main/docs/BMWE_gefoerdert_en_RGB.png" width="230" height="230" />
+
 ## Credits
 
 This package was created with [Cookiecutter](https://github.com/audreyfeldroy/cookiecutter) and the [audreyfeldroy/cookiecutter-pypackage](https://github.com/audreyfeldroy/cookiecutter-pypackage) project template.
