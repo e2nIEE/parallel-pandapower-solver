@@ -32,6 +32,7 @@ from pandapower.run import runpp
 from pandapower.toolbox.data_modification import create_continuous_bus_index
 
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
+from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 _HAS_CUDA = False

@@ -68,6 +68,7 @@ class MethodResults(TypedDict):
     ms_per_cont: list[float | int | None]
     errors: list[Exception]
     threads: int | None
+    chunk_size: int | None
 
 
 class BenchmarkResults(TypedDict):
@@ -86,6 +87,8 @@ def build_net(limit: int | None = None):
     become contingencies; the rest stay in service (no outage_group).
     """
     net = case9241pegase()
+    if "name" not in net or not net.name:
+        net.name = "case9241pegase"
     calculate_trafo_characteristic(net, inplace=True)
     net.line["outage_group"] = None
     net.trafo["outage_group"] = None
@@ -131,7 +134,7 @@ def time_p3s(net, threads: int, chunk: int | None = None):
     """Warm up (build pattern / fill caches), then time the batched contingency solve.
 
     When ``chunk`` is given, solve in memory-bounded chunks and return only converged
-    counts (no result table). Otherwise solve the whole batch at once and return the
+    counts (no result table). Otherwise, solve the whole batch at once and return the
     full ``ContingencyResultTable`` (needed for the --validate spot-check).
     """
     if chunk is not None:
@@ -163,7 +166,7 @@ def time_gpu(net, max_chunk: int | None = None, backend: str = "cudss"):
     from p3s.contingency.solver_cuda import solve_contingencies_cuda
 
     # warm up: kernel compile + cuSolverRf symbolic setup + first factor happen once here,
-    # so they don't pollute the timed run. Use a tiny sub-net (first outage group) to keep
+    # so they don't pollute the timed run. Use a tiny subnet (first outage group) to keep
     # the warmup cheap while still exercising the full code path.
     warm = copy.deepcopy(net)
     all_groups = enumerate_contingencies(net)
@@ -215,7 +218,7 @@ def validate(net, res, groups, n_sample: int):
     return vm_max, va_max, mask_mismatch, len(idx)
 
 
-def main():
+def _parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
         "--limit", type=int, default=None, help="only benchmark the first N branches (default: all lines+trafos)"
@@ -247,14 +250,15 @@ def main():
     ap.add_argument(
         "--backend",
         choices=("cpp", "gpu", "both"),
-        default="cpp",
+        default="both",
         help="which p3s solver to time: cpp=nr_klu (default), "
         "gpu=fully-resident polar cuSolverRf, both=run both and compare",
     )
     ap.add_argument(
         "--gpu-max-chunk",
         type=int,
-        default=None,
+        nargs="+",
+        default=[512],
         help="GPU: cap the per-chunk batch size (default: memory-budget only). "
         "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
         "leave unset on large GPUs (A100) so the memory budget decides.",
@@ -279,11 +283,14 @@ def main():
         "--job-id",
         "-j",
         type=str,
-        default=None,
+        default="no-job-id",
         help="Job ID for output file naming",
     )
-    args = ap.parse_args()
+    return ap.parse_args()
 
+
+def main():
+    args = _parse_args()
     print("Building case9241pegase with per-branch outage groups ...")
     net, n_branches = build_net(args.limit)
     groups = enumerate_contingencies(net)
@@ -306,7 +313,7 @@ def main():
 
     contingency_results: BenchmarkResults = BenchmarkResults(
         case=net.name,
-        job_id="",
+        job_id=args.job_id,
         timestamp=datetime.now().isoformat(),
         bus_count=count,
         T_values=[],
@@ -326,32 +333,45 @@ def main():
             print(f"\nRunning p3s CPU batch (nr_klu, threads={thread or 'all'}{chunk_note}) ...")
             res_cpp, t_cpp, n_conv_c, _ = time_p3s(net, thread, chunk=args.chunk)
             print(
-                f"  nr_klu:    {t_cpp:8.3f} s total | {t_cpp / n_cont * 1e3:8.3f} "
+                f"  nr_klu:    {t_cpp:.3f} s total | {t_cpp / n_cont * 1e3:.3f} "
                 f"ms/contingency | converged {n_conv_c}/{n_cont}"
             )
             result: MethodResults = MethodResults(
                 status="success",
-                time_ms=[t_cpp],
+                time_ms=[t_cpp * 1e3],
                 results=[],
                 ms_per_cont=[float(t_cpp / n_cont)],
                 errors=[],
                 threads=thread,
+                chunk_size=args.chunk if args.chunk else None,
             )
             results.append(result)
         contingency_results["methods"]["cpp"] = results
 
     if do_gpu:
-        mc_note = f", max_chunk={args.gpu_max_chunk}" if args.gpu_max_chunk else ""
-        print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
-        res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=args.gpu_max_chunk, backend=args.gpu_backend)
-        print(
-            f"  polar GPU: {t_gpu:8.3f} s total | {t_gpu / n_cont * 1e3:8.3f} "
-            f"ms/contingency | converged {n_conv_g}/{n_cont}"
-        )
-        result: MethodResults = MethodResults(
-            status="success", time_ms=[t_gpu], results=[], ms_per_cont=[float(t_gpu / n_cont)], errors=[], thread=0
-        )
-        contingency_results["methods"]["gpu"] = [result]
+        chunks: list[int] = args.gpu_max_chunk
+
+        results = []
+        for chunk in chunks:
+            mc_note = f", max_chunk={chunk}"
+            print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
+            res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=chunk, backend=args.gpu_backend)
+            print(
+                f"  polar GPU: {t_gpu:.3f} s total | {t_gpu / n_cont * 1e3:.3f} "
+                f"ms/contingency | converged {n_conv_g}/{n_cont}"
+            )
+            result: MethodResults = MethodResults(
+                status="success",
+                time_ms=[t_gpu * 1e3],
+                results=[],
+                ms_per_cont=[float(t_gpu / n_cont)],
+                errors=[],
+                threads=1,
+                chunk_size=chunk,
+            )
+            results.append(result)
+
+        contingency_results["methods"]["gpu"] = results
 
     # CPU vs GPU agreement (both have full result tables here)
     if do_cpp and do_gpu and res_cpp is not None and res_gpu is not None:
@@ -380,11 +400,6 @@ def main():
     elif args.validate and res_for_val is None:
         print("\n(--validate skipped: --chunk keeps no result table to compare)")
 
-    if args.job_id:
-        contingency_results["job_id"] = args.job_id
-    else:
-        contingency_results["job_id"] = "no_job_id"
-
     if args.output_dir:
         filepath = write_results(contingency_results, args.output_dir)
         print(f"Results written to: {filepath}")
@@ -396,26 +411,27 @@ def main():
     print(f"\nRunning pandapower per-contingency loop ({n_cont} runpp solves; this is the slow part) ...")
     t_pp, n_conv_pp = time_pandapower(net, groups)
     print(
-        f"  pandapower: {t_pp:8.3f} s total | {t_pp / n_cont * 1e3:8.3f} ms/contingency"
-        f" | converged {n_conv_pp}/{n_cont}"
+        f"  pandapower: {t_pp:.3f} s total | {t_pp / n_cont * 1e3:.3f} ms/contingency | converged {n_conv_pp}/{n_cont}"
     )
 
     print("\n" + "=" * 60)
     print(f"  N-1 on case9241pegase: {n_cont} contingencies")
     if t_cpp is not None:
         print(
-            f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:8.2f} s  ({t_pp / t_cpp:5.1f}x vs pandapower)"
+            f"  p3s CPU (nr_klu, {args.threads or 'all'} threads): {t_cpp:.2f} s  ({t_pp / t_cpp:.1f}x vs pandapower)"
         )
     if t_gpu is not None:
-        print(f"  p3s GPU (polar cuSolverRf):            {t_gpu:8.2f} s  ({t_pp / t_gpu:5.1f}x vs pandapower)")
-    print(f"  pandapower loop:                            {t_pp:8.2f} s")
+        print(f"  p3s GPU (polar {args.gpu_backend}):            {t_gpu:.2f} s  ({t_pp / t_gpu:.1f}x vs pandapower)")
+    print(f"  pandapower loop:                            {t_pp:.2f} s")
     print("=" * 60)
 
 
-def write_results(results: BenchmarkResults, output_dir) -> str:
+def write_results(results: BenchmarkResults, output_dir: str | os.PathLike) -> str:
     """Write results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{results['job_id']}_{results['case']}.json"
+    print(f"Writing results to {filename}")
+    print(results.keys(), results["job_id"], results["case"])
     filepath_ = os.path.join(output_dir, filename)
 
     with open(filepath_, "w") as f:

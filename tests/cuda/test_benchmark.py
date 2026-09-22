@@ -19,11 +19,10 @@ import pytest
 from pandapower.networks import case9241pegase
 
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
+from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 from p3s.NewtonPowerflow import NewtonPowerflow
 
 pytest.importorskip("pycuda", reason="pycuda not installed")
-
-from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA  # noqa: E402
 
 
 def _make_profile(net, T, seed=0):
