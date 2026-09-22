@@ -19,6 +19,7 @@ from p3s.models.TwoPort import TwoPort
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
+from p3s.timeseries import mean_setpoint_vm
 
 
 class NewtonPowerflow:
@@ -155,6 +156,11 @@ class NewtonPowerflow:
 
             # and add the vm and va set point to the initial voltage vector
             self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
+
+        # Seed the remaining PQ buss at the mean generator / ext_grid set point rather than a flat 1.0 pu.
+        # This is what pandapower's init = "auto" does, and it saves Newton iterations.
+        if len(pq) > 0:
+            self._initial_voltage[pq] = mean_setpoint_vm(net)
 
         self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
@@ -380,9 +386,13 @@ class NewtonPowerflow:
         if initialize_pf == "dc":
             pvpq = np.r_[self.busses["pv"], self.busses["pq"]]
             pv = self.busses["pv"]
+            pq = self.busses["pq"]
             # Capture PV magnitude set-points before the DC solve overwrites them
             # (voltage may alias self._initial_voltage, which _pre_dc_solve writes into).
             pv_vm = np.abs(voltage[pv]) if len(pv) > 0 else None
+            # Same for PQ: the seed magnitude there is the mean generator set point
+            # (see mean_setpoint_vm), not 1.0 pu, and _pre_dc_solve would reset it.
+            pq_vm = np.abs(voltage[pq]) if len(pq) > 0 else None
             # DC init: B*theta = P_inj (real bus injection + phase-shift injection).
             # _Bbus is already real susceptance (pass directly, not .imag -> would
             # double-.imag to zeros); RHS must include _sBus.real, not just _p_shift.
@@ -395,9 +405,11 @@ class NewtonPowerflow:
             )
             # The DC init only provides angles; it returns magnitude 1.0 for all pvpq
             # buses, which would clobber the known voltage-magnitude set-points at PV
-            # buses. Restore PV magnitudes (keep the DC-estimated angle).
+            # buses. Restore PV and PQ magnitudes (keep the DC-estimated angle).
             if len(pv) > 0:
                 voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))
+            if len(pq) > 0:
+                voltage[pq] = pq_vm * np.exp(1j * np.angle(voltage[pq]))
 
         i = 0
         converged = False
