@@ -361,7 +361,7 @@ def find_overloads(net, res, threshold_percent: float = 100.0, elements=("line",
     if npf is None and len(elements):
         npf = NewtonPowerflow(net)
 
-    el_l, idx_l, grp_l, case_l, load_l, ika_l, rate_l = [], [], [], [], [], [], []
+    el_l, idx_l, grp_l, case_l, load_l, ika_l, rate_l = [], [], [], [], [], [], []  # type: ignore[var-annotated]
     for element in elements:
         if element not in net or len(net[element]) == 0:
             continue
