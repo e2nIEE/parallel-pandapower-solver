@@ -17,7 +17,7 @@ from p3s.models.TransmissionLineModel import TransmissionLineModel
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
-from p3s.timeseries import build_sbus_matrix, dc_initial_voltage
+from p3s.timeseries import build_sbus_matrix, dc_initial_voltage, mean_setpoint_vm
 
 # Fast C++ Newton-Raphson solver (polar formulation, KLU linear solve). Installed into
 # the p3s package by `pip install p3s[cpp]` (CMake / scikit-build-core; see
@@ -171,6 +171,11 @@ class NewtonPowerflow:
 
             # and add the vm and va set point to the initial voltage vector
             self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
+
+        # Seed the remaining PQ buss at the mean generator / ext_grid set point rather than a flat 1.0 pu.
+        # This is what pandapower's init = "auto" does, and it saves Newton iterations.
+        if len(pq) > 0:
+            self._initial_voltage[pq] = mean_setpoint_vm(net)
 
         self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
@@ -384,6 +389,9 @@ class NewtonPowerflow:
             # PV buses. Since a PV bus holds |V| fixed during the solve, an unrestored
             # 1.0 here is never corrected and propagates a large error to neighbours.
             pv_vm = np.abs(voltage[pv]) if len(pv) > 0 else None
+            # Same for PQ: the seed magnitude there is the mean generator set point
+            # (see mean_setpoint_vm), not 1.0 pu, and _pre_dc_solve would reset it.
+            pq_vm = np.abs(voltage[pq]) if len(pq) > 0 else None
             # DC init solves B*theta = P_inj. P_inj is the real bus power injection
             # (self._sBus.real) PLUS the transformer phase-shift injection
             # (self._p_shift). Two prior bugs are fixed here: (1) self._Bbus is ALREADY
@@ -399,9 +407,11 @@ class NewtonPowerflow:
                 ref=self.busses["ref"],
                 pvpq=pvpq,
             )
-            # Restore PV magnitudes (keep the DC-estimated angle).
+            # Restore PV and PQ magnitudes (keep the DC-estimated angle).
             if len(pv) > 0:
                 voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))
+            if len(pq) > 0:
+                voltage[pq] = pq_vm * np.exp(1j * np.angle(voltage[pq]))
 
         # CSR arrays of Ybus, passed zero-copy into the C++ solver (no .tolist()).
         # scipy guarantees C-contiguous indptr/indices/data, and the dtype casts
