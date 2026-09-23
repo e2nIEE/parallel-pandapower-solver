@@ -189,6 +189,13 @@ class NewtonPowerflow:
         if len(pq) > 0:
             self._initial_voltage[pq] = mean_setpoint_vm(net)
 
+        # Constant-power half of the ward equivalents. The shunt half is already in Ybus
+        # (see make_ybus); this adds ps/qs as an ordinary PQ demand. A ward has no
+        # scaling column -- pandapower hardcodes scaling = 1.0 for ward/xward -- and
+        # out-of-service wards were zeroed when the model was built.
+        if 'ward' in self._ybus_elements:
+            sBus = sBus.add(pd.Series(self._ybus_elements['ward'].s_bus), fill_value=0)
+
         self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
         self.busses = {"ref": ref, "pv": pv, "pq": pq}

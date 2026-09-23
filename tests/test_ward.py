@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Tests for the pandapower ``ward`` element (graviton.models.WardModel).
+"""Tests for the pandapower ``ward`` element (p3s.models.WardModel).
 
-A ward is the first ACTIVE element in graviton/models: it contributes to BOTH the Ybus
+A ward is the first ACTIVE element in p3s/models: it contributes to BOTH the Ybus
 diagonal (its constant-impedance half, pz/qz) and the bus injection vector Sbus (its
 constant-power half, ps/qs). These tests pin each half separately as well as the
 combined power flow and res_ward output against pandapower.
@@ -60,7 +60,7 @@ def test_shunt_half_matches_pandapower_ybus():
     y_ward = model.create_y_matrix(n_bus=n_bus).toarray()
 
     # isolate the ward contribution: pandapower's Ybus minus the line stamp
-    from graviton.models.TransmissionLineModel import TransmissionLineModel
+    from p3s.models.TransmissionLineModel import TransmissionLineModel
 
     voltages = net.bus.vn_kv[net.line.from_bus].values
     y_line = (
