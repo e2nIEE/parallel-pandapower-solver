@@ -10,7 +10,6 @@ the Ybus stamp, the DC B-matrix and the res_impedance flows against pandapower.
 """
 
 import numpy as np
-import pytest
 from pandapower.auxiliary import pandapowerNet
 from pandapower.create import (
     create_bus,
