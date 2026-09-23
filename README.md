@@ -6,14 +6,14 @@ SPDX-License-Identifier: BSD-3-Clause
 
 # p3s - parallel pandapower solver
 
-![PyPI version](https://img.shields.io/pypi/v/p3s.svg)
-[![Documentation Status](https://readthedocs.org/projects/p3s/badge/?version=latest)](https://p3s.readthedocs.io/en/latest/?version=latest)
+[![PyPI version](https://img.shields.io/pypi/v/parallel-pandapower-solver.svg)](https://pypi.org/project/parallel-pandapower-solver/)
+[![Documentation Status](https://readthedocs.org/projects/parallel-pandapower-solver/badge/?version=latest)](https://parallel-pandapower-solver.readthedocs.io/en/latest/?version=latest)
 
 CPU / GPU based AC/DC Powerflow solver
 
-* PyPI package: https://pypi.org/project/p3s/
+* PyPI package: https://pypi.org/project/parallel-pandapower-solver/
 * Free software: BSD-3-Clause
-* Documentation: https://p3s.readthedocs.io.
+* Documentation: https://parallel-pandapower-solver.readthedocs.io.
 
 ## Features
 
@@ -65,7 +65,7 @@ Look into docs/installation.md for more details.
 
 The code in this repository was created as part of the research project “GRAVITON”, supported by the German Federal Ministry for Economic Affairs and Climate Action (BMWE) on the basis of a decision by the German Bundestag (grant no. 03EIM4109).
 
-<img src="https://github.com/e2nIEE/parallel-pandapower-solver/blob/main/docs/BMWE_gefoerdert_en_RGB.png" width="230" height="230" />
+<img alt="Supported by: Federal Ministry for Economic Affairs and Energy on the basis of a decision by the German Bundestag" src="https://github.com/e2nIEE/parallel-pandapower-solver/blob/main/docs/BMWE_gefoerdert_en_RGB.png" width="230" height="230" />
 
 ## Credits
 
