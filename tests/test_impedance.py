@@ -11,8 +11,6 @@ the Ybus stamp, the DC B-matrix and the res_impedance flows against pandapower.
 
 import numpy as np
 import pytest
-from graviton.models.ImpedanceModel import ImpedanceModel
-from graviton.NewtonPowerflow import NewtonPowerflow
 from pandapower.auxiliary import pandapowerNet
 from pandapower.create import (
     create_bus,
@@ -23,6 +21,9 @@ from pandapower.create import (
     create_load,
 )
 from pandapower.run import rundcpp, runpp
+
+from p3s.models.ImpedanceModel import ImpedanceModel
+from p3s.NewtonPowerflow import NewtonPowerflow
 
 # asymmetric impedance with terminal shunts, as used for network equivalents
 ASYM = dict(
