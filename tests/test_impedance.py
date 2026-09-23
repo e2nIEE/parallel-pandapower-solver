@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Tests for the pandapower ``impedance`` element (graviton.models.ImpedanceModel).
+"""Tests for the pandapower ``impedance`` element (p3s.models.ImpedanceModel).
 
 The impedance is the only branch element with an ASYMMETRIC series admittance
 (z_ft != z_tf) and per-unit values referred to its own sn_mva, so these tests pin
@@ -62,7 +62,7 @@ def test_ybus_matches_pandapower():
     runpp(net)
 
     # isolate the impedance contribution: build the line stamp separately and add it
-    from graviton.models.TransmissionLineModel import TransmissionLineModel
+    from p3s.models.TransmissionLineModel import TransmissionLineModel
 
     n_bus = len(net.bus)
     voltages = net.bus.vn_kv[net.line.from_bus].values
@@ -78,7 +78,7 @@ def test_dc_bbus_matches_pandapower():
     net = net_with_impedances()
     rundcpp(net)
 
-    from graviton.models.TransmissionLineModel import TransmissionLineModel
+    from p3s.models.TransmissionLineModel import TransmissionLineModel
 
     n_bus = len(net.bus)
     voltages = net.bus.vn_kv[net.line.from_bus].values

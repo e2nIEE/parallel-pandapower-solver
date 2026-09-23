@@ -151,7 +151,7 @@ def _net_with_real_ratings():
 @pytest.mark.parametrize("threshold", [70.0, 100.0, 150.0])
 def test_find_overloads_matches_pandapower(threshold):
     """Every reported violation must reproduce a real pandapower outaged solve."""
-    from graviton.contingency.line_loading import find_overloads
+    from p3s.contingency.find_overloads import find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
@@ -172,7 +172,7 @@ def test_find_overloads_matches_pandapower(threshold):
 
 def test_find_overloads_threshold_is_percent_of_rating():
     """A higher threshold must be a strict subset, and everything reported exceeds it."""
-    from graviton.contingency.line_loading import find_overloads
+    from p3s.contingency.find_overloads import find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
@@ -192,7 +192,7 @@ def test_find_overloads_threshold_is_percent_of_rating():
 
 def test_find_overloads_equals_dense_table_filter():
     """The sparse report must equal filtering the dense table at the same level."""
-    from graviton.contingency.line_loading import compute_branch_loading, find_overloads
+    from p3s.contingency.find_overloads import compute_branch_loading, find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
@@ -205,7 +205,7 @@ def test_find_overloads_equals_dense_table_filter():
 
 
 def test_find_overloads_sorted_and_clean():
-    from graviton.contingency.line_loading import find_overloads
+    from p3s.contingency.find_overloads import find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
@@ -226,7 +226,7 @@ def test_find_overloads_sorted_and_clean():
 
 
 def test_find_overloads_empty_when_threshold_unreachable():
-    from graviton.contingency.line_loading import find_overloads
+    from p3s.contingency.find_overloads import find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
@@ -239,7 +239,7 @@ def test_find_overloads_empty_when_threshold_unreachable():
 
 
 def test_find_overloads_rejects_bad_input():
-    from graviton.contingency.line_loading import find_overloads
+    from p3s.contingency.find_overloads import find_overloads
 
     net = _net_with_real_ratings()
     res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
