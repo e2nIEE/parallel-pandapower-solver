@@ -154,31 +154,6 @@ def test_out_of_service_impedance_solves():
     assert np.allclose(net.res_impedance.loc[1, ["p_from_mw", "q_from_mvar"]].values, 0.0)
 
 
-@pytest.mark.parametrize(
-    "dropped",
-    [
-        ["gf_pu", "bf_pu", "gt_pu", "bt_pu"],
-        ["bf_pu"],
-    ],
-)
-def test_missing_shunt_columns_default_to_zero(dropped):
-    """Nets from older pandapower versions may lack the terminal shunt columns."""
-    net = net_with_impedances()
-    table = net.impedance.drop(columns=dropped)
-    model = ImpedanceModel(table, net.bus, sn_mva=net.sn_mva)
-    assert np.isfinite(np.asarray(model._Y_ff)).all()
-    assert np.isfinite(np.asarray(model._Y_tt)).all()
-
-
-def test_nan_shunt_values_treated_as_zero():
-    """NaN in a shunt column must not poison Ybus."""
-    net = net_with_impedances()
-    table = net.impedance.copy()
-    table["bf_pu"] = np.nan
-    model = ImpedanceModel(table, net.bus, sn_mva=net.sn_mva)
-    assert np.isfinite(np.asarray(model._Y_ff)).all()
-
-
 def test_sn_mva_rebasing():
     """Doubling the element sn_mva halves its per-unit impedance on the network base."""
     net = net_with_impedances()

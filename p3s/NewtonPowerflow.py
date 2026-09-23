@@ -97,7 +97,7 @@ class NewtonPowerflow:
             Ybus_col.extend(Ybus_shunts.col)
 
         if "impedance" in net and len(net.impedance) > 0:
-            impedances = ImpedanceModel(net.impedance, sn_mva=net.sn_mva)
+            impedances = ImpedanceModel(net.impedance, net.bus, sn_mva=net.sn_mva)
             self._ybus_elements["impedance"] = impedances
             Ybus_impedances = impedances.create_y_matrix(n_bus=n_bus)
             Ybus_dat.extend(Ybus_impedances.data)

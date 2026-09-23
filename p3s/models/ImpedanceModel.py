@@ -96,10 +96,16 @@ class ImpedanceModel(TwoPort):
     ``sn_mva``, so they only need rebasing onto the network reference power.
     """
 
-    def __init__(self, impedance_table: DataFrame, sn_mva: float = 1.0):
+    def __init__(self, impedance_table: DataFrame, bus_table: DataFrame, sn_mva: float = 1.0):
         super().__init__()
         self._from_bus = impedance_table["from_bus"].values
         self._to_bus = impedance_table["to_bus"].values
+
+        # Base voltages of both terminals, kept for the res_impedance currents
+        # (i_ka = |S| / (vn_kv * vm_pu * sqrt(3))). Unlike a line, an impedance may span a
+        # voltage step.
+        self.voltages_from = bus_table.loc[self._from_bus, "vn_kv"].values
+        self.voltages_to = bus_table.loc[self._to_bus, "vn_kv"].values
 
         # Input Values
         rft_pu = impedance_table["rft_pu"].values
