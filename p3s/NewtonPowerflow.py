@@ -11,6 +11,7 @@ from pandapower import LoadflowNotConverged, pandapowerNet
 from scipy.sparse import csr_matrix as sparse
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
+from p3s.models.ImpedanceModel import ImpedanceModel
 from p3s.models.ShuntModel import ShuntModel
 from p3s.models.ThreePort import ThreePort
 from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
@@ -94,6 +95,19 @@ class NewtonPowerflow:
             Ybus_dat.extend(Ybus_shunts.data)
             Ybus_row.extend(Ybus_shunts.row)
             Ybus_col.extend(Ybus_shunts.col)
+
+        if "impedance" in net and len(net.impedance) > 0:
+            impedances = ImpedanceModel(net.impedance, sn_mva=net.sn_mva)
+            self._ybus_elements["impedance"] = impedances
+            Ybus_impedances = impedances.create_y_matrix(n_bus=n_bus)
+            Ybus_dat.extend(Ybus_impedances.data)
+            Ybus_row.extend(Ybus_impedances.row)
+            Ybus_col.extend(Ybus_impedances.col)
+
+            Bbus_impedances = impedances.create_y_dc_matrix(n_bus=n_bus)
+            Bbus_dat.extend(Bbus_impedances.data)
+            Bbus_row.extend(Bbus_impedances.row)
+            Bbus_col.extend(Bbus_impedances.col)
 
         Ybus = sparse((Ybus_dat, (Ybus_row, Ybus_col)), shape=(n_bus, n_bus))
         Bbus = sparse((Bbus_dat, (Bbus_row, Bbus_col)), shape=(n_bus, n_bus)).imag
@@ -277,12 +291,12 @@ class NewtonPowerflow:
             res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
 
         # -- calculate gen results --
-        net.res_gen = _ensure_index(net.res_gen, net.gen.index)
         # Only nets with generators do the gen-result maths: "_lookup" is added to net.gen
         # by _setup_pf solely when len(net.gen) > 0, so on a PQ-only net (SAM's usual case)
         # net.gen exists but has no "_lookup" column. Guard the whole block (the ext_grid
         # results below must still run).
-        if len(net.gen) > 0:
+        if "gen" in self._ybus_elements and "gen" in net and len(net.gen):
+            net.res_gen = _ensure_index(net.res_gen, net.gen.index)
             gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
             res_gen = net.res_gen
 
@@ -330,6 +344,37 @@ class NewtonPowerflow:
                 gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))[gen_lookup]
                 q_gen = q_tot / gens_per_bus
             res_gen["q_mvar"].to_numpy(copy=False)[:] = q_gen
+
+        # -- calculate impedance results --
+        # res_impedance has no vm_*/va_*/loading_percent columns (an impedance carries no
+        # rating), so this is the short form of the line block. Losses are the SUM of both
+        # terminal flows -- pandapower's _get_impedance_results uses pl = p_from + p_to,
+        # the res_trafo convention, not res_line's absolute difference.
+        if "impedance" in self._ybus_elements and "impedance" in net and len(net.impedance):
+            net.res_impedance = _ensure_index(net.res_impedance, net.impedance.index)
+            impedances = self._ybus_elements["impedance"]
+
+            imp_power_from = np.conj(impedances.yf_matrix * voltage) * voltage[impedances._from_bus] * net.sn_mva
+            imp_power_to = np.conj(impedances.yt_matrix * voltage) * voltage[impedances._to_bus] * net.sn_mva
+
+            # Each terminal is referred to its OWN base voltage: an impedance may span a
+            # voltage step, unlike a line.
+            imp_currents_from = np.abs(
+                imp_power_from / (impedances.voltages_from * vm[impedances._from_bus] * np.sqrt(3))
+            )
+            imp_currents_to = np.abs(imp_power_to / (impedances.voltages_to * vm[impedances._to_bus] * np.sqrt(3)))
+
+            res_impedance = net.res_impedance
+            res_impedance["p_from_mw"].to_numpy(copy=False)[:] = imp_power_from.real
+            res_impedance["q_from_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag
+            res_impedance["i_from_ka"].to_numpy(copy=False)[:] = imp_currents_from
+
+            res_impedance["p_to_mw"].to_numpy(copy=False)[:] = imp_power_to.real
+            res_impedance["q_to_mvar"].to_numpy(copy=False)[:] = imp_power_to.imag
+            res_impedance["i_to_ka"].to_numpy(copy=False)[:] = imp_currents_to
+
+            res_impedance["pl_mw"].to_numpy(copy=False)[:] = imp_power_from.real + imp_power_to.real
+            res_impedance["ql_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag + imp_power_to.imag
 
         # -- calculate ext_grid results --
         net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
