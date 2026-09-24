@@ -19,11 +19,12 @@ from p3s.models.TwoPort import TwoPort
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
+from p3s.q_capability import resolve_q_limits
 from p3s.timeseries import mean_setpoint_vm
 
 
 class NewtonPowerflow:
-    def __init__(self, net: pandapowerNet):
+    def __init__(self, net: pandapowerNet, enforce_q_lims: bool = False):
         self.pf_objects: dict[str, PowerflowObject] = {}
         self._sBus: NDArray = None
         self._YBus: sparse = None
@@ -35,6 +36,7 @@ class NewtonPowerflow:
         # keeping a reference on all classes which create the ybus.
         self._ybus_elements: dict[str, TwoPort | ThreePort] = {}
         self.busses: dict = {}
+        self.enforce_q_lims: bool = enforce_q_lims
         self._setup_pf(net)
 
     def make_ybus(self, net: pandapowerNet) -> tuple[sparse, sparse]:
@@ -128,7 +130,25 @@ class NewtonPowerflow:
 
         if "sgen" in net and len(net["sgen"]) > 0:
             net.sgen["_lookup"] = self._lookup[net.sgen.bus].values.astype(int)
-            res_mw = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.sgen.scaling * net.sgen.in_service
+
+            # Reactive capability limits. An sgen is a PQ injection: its q_mvar is an
+            # INPUT, so "enforcing" a limit means clipping the requested Q to the machine's
+            # capability at its dispatched P -- there is no bus-type switch to make and no
+            # outer loop needed, because P does not change during a PQ solve.
+            q_sgen = net.sgen.q_mvar
+            if self.enforce_q_lims:
+                limits = resolve_q_limits(net, "sgen")
+                if limits is not None:
+                    q_min, q_max = limits
+                    # NaN limit = unlimited on that side; clip only where finite.
+                    q_clipped = np.clip(
+                        q_sgen.to_numpy(dtype=float),
+                        np.where(np.isnan(q_min), -np.inf, q_min),
+                        np.where(np.isnan(q_max), np.inf, q_max),
+                    )
+                    q_sgen = pd.Series(q_clipped, index=net.sgen.index)
+
+            res_mw = (net.sgen.p_mw + q_sgen * 1j) * net.sgen.scaling * net.sgen.in_service
 
             _sgen = -1.0 * res_mw.groupby(net.sgen["_lookup"]).sum()
             sBus = sBus.add(_sgen, fill_value=0)
