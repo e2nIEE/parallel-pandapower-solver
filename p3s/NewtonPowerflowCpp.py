@@ -306,6 +306,36 @@ class NewtonPowerflow:
             )
             res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
 
+        # -- calculate impedance results --
+        # res_impedance has no vm_*/va_*/loading_percent columns (an impedance carries no
+        # rating), so this is the short form of the line block. Losses are the SUM of both
+        # terminal flows -- pandapower's _get_impedance_results uses pl = p_from + p_to,
+        # the res_trafo convention, not res_line's absolute difference.
+        if "impedance" in self._ybus_elements and "impedance" in net and len(net.impedance):
+            net.res_impedance = _ensure_index(net.res_impedance, net.impedance.index)
+            impedances = self._ybus_elements["impedance"]
+
+            imp_power_from = np.conj(impedances.yf_matrix * voltage) * voltage[impedances._from_bus] * net.sn_mva
+            imp_power_to = np.conj(impedances.yt_matrix * voltage) * voltage[impedances._to_bus] * net.sn_mva
+
+            # Each terminal is referred to its OWN base voltage: an impedance may span a
+            # voltage step, unlike a line.
+            imp_currents_from = np.abs(
+                imp_power_from / (impedances.voltages_from * vm[impedances._from_bus] * np.sqrt(3))
+            )
+            imp_currents_to = np.abs(imp_power_to / (impedances.voltages_to * vm[impedances._to_bus] * np.sqrt(3)))
+
+            res_impedance = net.res_impedance
+            res_impedance["p_from_mw"].to_numpy(copy=False)[:] = imp_power_from.real
+            res_impedance["q_from_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag
+            res_impedance["i_from_ka"].to_numpy(copy=False)[:] = imp_currents_from
+
+            res_impedance["p_to_mw"].to_numpy(copy=False)[:] = imp_power_to.real
+            res_impedance["q_to_mvar"].to_numpy(copy=False)[:] = imp_power_to.imag
+            res_impedance["i_to_ka"].to_numpy(copy=False)[:] = imp_currents_to
+
+            res_impedance["pl_mw"].to_numpy(copy=False)[:] = imp_power_from.real + imp_power_to.real
+            res_impedance["ql_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag + imp_power_to.imag
         # -- calculate ward results --
         # res_ward reports the TWO halves recombined, as pandapower does:
         #     p_mw = ps_mw + vm**2 * pz_mw ,  q_mvar = qs_mvar + vm**2 * qz_mvar
@@ -323,23 +353,24 @@ class NewtonPowerflow:
             res_ward["q_mvar"].to_numpy(copy=False)[:] = wards._qs_mvar + vm_ward**2 * wards._qz_mvar
 
         # -- calculate gen results --
-        net.res_gen = _ensure_index(net.res_gen, net.gen.index)
-        gen_bus = net.res_bus.loc[self.pf_objects["PVPQ"]._pv]
-        gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
-        res_gen = net.res_gen
+        if "gen" in self._ybus_elements and "gen" in net and len(net.gen):
+            net.res_gen = _ensure_index(net.res_gen, net.gen.index)
+            gen_bus = net.res_bus.loc[self.pf_objects["PVPQ"]._pv]
+            gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
+            res_gen = net.res_gen
 
-        # vm/va are per-bus quantities -> broadcast to every gen on that bus
-        res_gen["vm_pu"].to_numpy(copy=False)[:] = gen_bus.vm_pu.to_numpy(copy=False)
-        res_gen["va_degree"].to_numpy(copy=False)[:] = gen_bus.va_degree.to_numpy(copy=False)
+            # vm/va are per-bus quantities -> broadcast to every gen on that bus
+            res_gen["vm_pu"].to_numpy(copy=False)[:] = gen_bus.vm_pu.to_numpy(copy=False)
+            res_gen["va_degree"].to_numpy(copy=False)[:] = gen_bus.va_degree.to_numpy(copy=False)
 
-        # direct copy
-        res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
+            # direct copy
+            res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
 
-        # total Q injected at each PV bus (per-bus), then split across gens on that bus
-        q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
-        # equal split: divide each bus's Q by the number of gens on it
-        gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
-        res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
+            # total Q injected at each PV bus (per-bus), then split across gens on that bus
+            q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
+            # equal split: divide each bus's Q by the number of gens on it
+            gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
+            res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
 
         # -- calculate ext_grid results --
         net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
