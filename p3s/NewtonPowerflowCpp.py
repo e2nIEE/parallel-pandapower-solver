@@ -21,7 +21,7 @@ from p3s.PQPVPowerflow import PQPVPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage, mean_setpoint_vm
 
 # Fast C++ Newton-Raphson solver (polar formulation, KLU linear solve). Installed into
-# the p3s package by `pip install p3s[cpp]` (CMake / scikit-build-core; see
+# the p3s package by `pip install parallel-pandapower-solver[cpp]` (CMake / scikit-build-core; see
 # p3s/cpp/). For an in-place dev build there is also p3s/cpp/build.sh.
 try:
     from p3s import nr_klu  # type: ignore[attr-defined]

@@ -102,7 +102,7 @@ a `Solver` per topology and invalidates it when the `Ybus` structure changes.
 |------|---------|
 | `nr_klu.cpp` | The solver (pybind module: `Solver` with `solve`/`solve_batch`, `solve_single`, `debug_J`). |
 | `test_batch.py` | Validates `solve_batch` vs scipy + thread-invariance on the `case*.npz` fixtures. |
-| `CMakeLists.txt` | Portable CMake build (pybind11 + KLU + optional OpenMP); used by `pip install p3s[cpp]`. |
+| `CMakeLists.txt` | Portable CMake build (pybind11 + KLU + optional OpenMP); used by `pip install parallel-pandapower-solver[cpp]`. |
 | `pyproject.toml` | scikit-build-core definition for the `p3s-cpp` distribution. |
 | `cmake/FindKLU.cmake` | KLU locator fallback for installs without a CMake config package. |
 | `test_integration.py` | `NewtonPowerflowCpp.calculate` vs pandapower `runpp` (vm/va error + timing). |
@@ -127,7 +127,7 @@ juggling.
 ### Install
 ```bash
 # opt-in extra of the main package (pulls in the p3s-cpp distribution)
-pip install p3s[cpp]
+pip install parallel-pandapower-solver[cpp]
 
 # from a source checkout, build this sub-package directly:
 pip install ./p3s/cpp

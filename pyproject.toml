@@ -69,7 +69,7 @@ test = [
 # `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s
 # package so `from p3s import nr_klu` works.
 #
-#   pip install p3s[cpp]              # from an index (published p3s-cpp)
+#   pip install parallel-pandapower-solver[cpp]              # from an index (published p3s-cpp)
 #   pip install .[cpp]                # from a checkout (see note below)
 #
 # From a source checkout, p3s-cpp is not on an index, so build it explicitly:

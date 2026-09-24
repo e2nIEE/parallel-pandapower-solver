@@ -12,13 +12,13 @@ To install the parallel pandapower solver , run this command in your terminal:
 
 .. code-block:: sh
 
-    uv add p3s
+    uv add parallel-pandapower-solver
 
 Or if you prefer to use ``pip``:
 
 .. code-block:: sh
 
-    pip install p3s
+    pip install parallel-pandapower-solver
 
 From source
 -----------
