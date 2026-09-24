@@ -6,7 +6,7 @@ SPDX-License-Identifier: BSD-3-Clause
 
 # p3s - parallel pandapower solver
 
-[![PyPI version](https://img.shields.io/pypi/v/parallel-pandapower-solver.svg)](https://pypi.org/project/parallel-pandapower-solver/)
+[![PyPI version](https://img.shields.io/pypi/v/parallel-pandapower-solver)](https://pypi.org/project/parallel-pandapower-solver/)
 [![Documentation Status](https://readthedocs.org/projects/parallel-pandapower-solver/badge/?version=latest)](https://parallel-pandapower-solver.readthedocs.io/en/latest/?version=latest)
 [![REUSE status](https://api.reuse.software/badge/github.com/e2nIEE/parallel-pandapower-solver)](https://api.reuse.software/info/github.com/e2nIEE/parallel-pandapower-solver)
 
