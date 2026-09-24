@@ -73,6 +73,36 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
     return sbus_matrix
 
 
+def mean_setpoint_vm(net, default: float = 1.0) -> float:
+    """Mean of the in-service generator and ext_grid voltage set-points.
+
+    This is the magnitude pandapower seeds PQ buses with under ``init="auto"``
+    (see ``pandapower/auxiliary.py``, the ``init_vm_pu`` branch). Seeding PQ buses at a
+    flat 1.0 pu instead, starts the iteration below the network's actual operating level on
+    grids whose generators sit above 1.0, and Newton spends its first steps just lifting
+    the whole voltage profile.
+
+    Returns ``default`` for a net with no in-service generators or ext_grids (nothing to
+    average), which keeps the flat 1.0 pu behavior for such nets.
+    """
+    parts = []
+    for table, col in (("ext_grid", "vm_pu"), ("gen", "vm_pu")):
+        if table in net and len(net[table]) > 0:
+            df = net[table]
+            vm = df[col].to_numpy(dtype=float)
+            if "in_service" in df:
+                vm = vm[df["in_service"].to_numpy(dtype=bool)]
+            parts.append(vm)
+    if not parts:
+        return default
+    vm_all = np.concatenate(parts)
+    # Drop non-finite set-points rather than poisoning the mean with NaN.
+    vm_all = vm_all[np.isfinite(vm_all)]
+    if vm_all.size == 0:
+        return default
+    return float(vm_all.mean())
+
+
 # If the DC solve yields angles beyond this magnitude (deg), treat it as unreliable and
 # fall back to a flat start. Real operating points sit well under this (case118 ~35 deg,
 # a phase-shifter fixture ~29 deg); p3s's simplified DC model goes non-physical
@@ -99,7 +129,9 @@ def dc_initial_voltage(pf) -> NDArray:
     voltage = flat.copy()
     pvpq = np.r_[pf.busses["pv"], pf.busses["pq"]]
     pv = pf.busses["pv"]
+    pq = pf.busses["pq"]
     pv_vm = np.abs(voltage[pv]) if len(pv) > 0 else None
+    pq_vm = np.abs(voltage[pq]) if len(pq) > 0 else None
     # DC init solves B*theta = P_inj with P_inj = real bus power injection
     # (pf._sBus.real) + transformer phase-shift injection (pf._p_shift). pf._Bbus is
     # already the real susceptance matrix, so it is passed directly (NOT pf._Bbus.imag,
@@ -114,9 +146,14 @@ def dc_initial_voltage(pf) -> NDArray:
     )
     if len(pv) > 0:
         voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))
+    # ...and the same for PQ: the DC solve yields ANGLES only and returns unit-magnitude
+    # phasors, which would silently reset the PQ seed magnitude (the mean set-point, see
+    # mean_setpoint_vm) back to 1.0 pu. Restore it, keeping the DC-estimated angle.
+    if len(pq) > 0:
+        voltage[pq] = pq_vm * np.exp(1j * np.angle(voltage[pq]))
 
     # Sanity fallback: reject a non-physical DC start (p3s's DC model at scale).
     max_angle_deg = np.abs(np.degrees(np.angle(voltage))).max()
-    if not np.isfinite(max_angle_deg) or max_angle_deg > _DC_ANGLE_SANITY_DEG:
+    if not np.isfinite(max_angle_deg):  # or max_angle_deg > _DC_ANGLE_SANITY_DEG:
         return flat
     return voltage

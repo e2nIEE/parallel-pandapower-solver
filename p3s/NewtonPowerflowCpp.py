@@ -15,9 +15,10 @@ from p3s.models.ShuntModel import ShuntModel
 from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
 from p3s.models.TransmissionLineModel import TransmissionLineModel
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
+from p3s.models.WardModel import WardModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
-from p3s.timeseries import build_sbus_matrix, dc_initial_voltage
+from p3s.timeseries import build_sbus_matrix, dc_initial_voltage, mean_setpoint_vm
 
 # Fast C++ Newton-Raphson solver (polar formulation, KLU linear solve). Installed into
 # the p3s package by `pip install p3s[cpp]` (CMake / scikit-build-core; see
@@ -26,21 +27,6 @@ try:
     from p3s import nr_klu  # type: ignore[attr-defined]
 except ImportError:
     from p3s.cpp import nr_klu  # type: ignore[attr-defined]
-    # # Fall back to a standalone build sitting in p3s/cpp/ (e.g. build.sh output).
-    # import os, sys
-    # _cpp_dir = os.path.join(os.path.dirname(__file__), "cpp")
-    # sys.path.insert(0, os.path.abspath(_cpp_dir))
-    # # In-place dev builds (build.sh / CMake) put the .pyd in cpp/Release/
-    # sys.path.insert(0, os.path.join(os.path.abspath(_cpp_dir), "Release"))
-    # try:
-    #     import nr_klu
-    # except ImportError as exc:  # pragma: no cover - depends on build state
-    #     raise ImportError(
-    #         "The compiled C++ solver 'nr_klu' is not available. Install it with "
-    #         "`pip install p3s[cpp]` (or `pip install ./p3s/cpp`), which needs "
-    #         "a C++17 compiler and SuiteSparse/KLU "
-    #         "(e.g. `conda install -c conda-forge suitesparse`)."
-    #     ) from exc
 
 
 class NewtonPowerflow:
@@ -104,7 +90,6 @@ class NewtonPowerflow:
             self._p_shift += trafos.p_shift
 
         if "trafo3w" in net and len(net.trafo3w) > 0:
-            # trafos = PiTransformer3W(net.trafo3w, sn_mva=net.sn_mva)
             trafo3ws = ThreeWindingTransformerModel(
                 net.trafo3w,
                 bus_table=net.bus,
@@ -116,6 +101,17 @@ class NewtonPowerflow:
             Ybus_dat.extend(Ybus_trafos3w.data)
             Ybus_row.extend(Ybus_trafos3w.row)
             Ybus_col.extend(Ybus_trafos3w.col)
+
+        # A ward is an ACTIVE element: only its constant-impedance half (pz/qz) can be
+        # stamped here. The constant-power half (ps/qs) is picked up from
+        # ``wards.s_bus`` in _setup_pf, which runs after make_ybus.
+        if "ward" in net and len(net.ward) > 0:
+            wards = WardModel(net.ward, n_bus=n_bus, sn_mva=net.sn_mva)
+            self._ybus_elements["ward"] = wards
+            Ybus_wards = wards.create_y_matrix(n_bus=n_bus)
+            Ybus_dat.extend(Ybus_wards.data)
+            Ybus_row.extend(Ybus_wards.row)
+            Ybus_col.extend(Ybus_wards.col)
 
         if "shunt" in net and len(net.shunt) > 0:
             shunts = ShuntModel(net.shunt, sn_mva=net.sn_mva)
@@ -151,32 +147,21 @@ class NewtonPowerflow:
 
         if "load" in net and len(net["load"]) > 0:
             net.load["_lookup"] = self._lookup[net.load.bus].values.astype(int)
-            # net.load['res_mw'] = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
             res_mw = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
 
-            # _load = net.load.groupby("_lookup").res_mw.sum()
             _load = res_mw.groupby(net.load["_lookup"]).sum()
             sBus = sBus.add(_load, fill_value=0)
-            # pq = net.load["_lookup"].values
 
         if "sgen" in net and len(net["sgen"]) > 0:
             net.sgen["_lookup"] = self._lookup[net.sgen.bus].values.astype(int)
-            # net.sgen['res_mw'] = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.load.scaling * net.load.in_service
             res_mw = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.sgen.scaling * net.sgen.in_service
-            # pq_sgen = net.sgen["_lookup"].values
 
-            # _sgen = -1. * net.sgen.groupby("_lookup").res_mw.sum()
             _sgen = -1.0 * res_mw.groupby(net.sgen["_lookup"]).sum()
             sBus = sBus.add(_sgen, fill_value=0)
 
-            # use union to combine bus id's
-            # pq = np.union1d(pq, pq_sgen)
-
         if "gen" in net and len(net["gen"]) > 0:
             net.gen["_lookup"] = self._lookup[net.gen.bus].values.astype(int)
-            pv = net.gen["_lookup"].values
 
-            # _gen = -1. * net.gen.groupby("_lookup").p_mw.sum() * net.gen.scaling.values * net.gen.in_service.values
             res_mw = net.gen.p_mw * net.gen.scaling * net.gen.in_service
             _gen = -1.0 * res_mw.groupby(net.gen["_lookup"]).sum()
             sBus = sBus.add(_gen, fill_value=0)
@@ -199,7 +184,19 @@ class NewtonPowerflow:
             # and add the vm and va set point to the initial voltage vector
             self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
 
-        self._sBus = -1. * sBus.values / net.sn_mva  # type: ignore[operator]
+        # Seed the remaining PQ buss at the mean generator / ext_grid set point rather than a flat 1.0 pu.
+        # This is what pandapower's init = "auto" does, and it saves Newton iterations.
+        if len(pq) > 0:
+            self._initial_voltage[pq] = mean_setpoint_vm(net)
+
+        # Constant-power half of the ward equivalents. The shunt half is already in Ybus
+        # (see make_ybus); this adds ps/qs as an ordinary PQ demand. A ward has no
+        # scaling column -- pandapower hardcodes scaling = 1.0 for ward/xward -- and
+        # out-of-service wards were zeroed when the model was built.
+        if "ward" in self._ybus_elements:
+            sBus = sBus.add(pd.Series(self._ybus_elements["ward"].s_bus), fill_value=0)
+
+        self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
         self.busses = {"ref": ref, "pv": pv, "pq": pq}
 
@@ -226,7 +223,6 @@ class NewtonPowerflow:
             return df
 
         sBus = np.conj(self._YBus * voltage) * voltage * net.sn_mva
-        # self._sBus = (sBus - self._sBus.imag * 1j) * net.sn_mva
 
         # -- calculate bus results --
         vm = np.abs(voltage)
@@ -304,37 +300,77 @@ class NewtonPowerflow:
             res_trafo["pl_mw"].to_numpy(copy=False)[:] = trafo_power_from.real + trafo_power_to.real
             res_trafo["ql_mvar"].to_numpy(copy=False)[:] = trafo_power_from.imag + trafo_power_to.imag
 
-            # loading_percent = np.maximum(trafo_currents_from.values * res_trafo['vm_hv_pu'].values,
-            #                             trafo_currents_to.values * res_trafo['vm_lv_pu'].values)
-
             loading_percent = np.maximum(
                 trafo_currents_from.values * trafos.voltages_from.values * np.sqrt(3),
                 trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
             )
             res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
 
+        # -- calculate impedance results --
+        # res_impedance has no vm_*/va_*/loading_percent columns (an impedance carries no
+        # rating), so this is the short form of the line block. Losses are the SUM of both
+        # terminal flows -- pandapower's _get_impedance_results uses pl = p_from + p_to,
+        # the res_trafo convention, not res_line's absolute difference.
+        if "impedance" in self._ybus_elements and "impedance" in net and len(net.impedance):
+            net.res_impedance = _ensure_index(net.res_impedance, net.impedance.index)
+            impedances = self._ybus_elements["impedance"]
+
+            imp_power_from = np.conj(impedances.yf_matrix * voltage) * voltage[impedances._from_bus] * net.sn_mva
+            imp_power_to = np.conj(impedances.yt_matrix * voltage) * voltage[impedances._to_bus] * net.sn_mva
+
+            # Each terminal is referred to its OWN base voltage: an impedance may span a
+            # voltage step, unlike a line.
+            imp_currents_from = np.abs(
+                imp_power_from / (impedances.voltages_from * vm[impedances._from_bus] * np.sqrt(3))
+            )
+            imp_currents_to = np.abs(imp_power_to / (impedances.voltages_to * vm[impedances._to_bus] * np.sqrt(3)))
+
+            res_impedance = net.res_impedance
+            res_impedance["p_from_mw"].to_numpy(copy=False)[:] = imp_power_from.real
+            res_impedance["q_from_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag
+            res_impedance["i_from_ka"].to_numpy(copy=False)[:] = imp_currents_from
+
+            res_impedance["p_to_mw"].to_numpy(copy=False)[:] = imp_power_to.real
+            res_impedance["q_to_mvar"].to_numpy(copy=False)[:] = imp_power_to.imag
+            res_impedance["i_to_ka"].to_numpy(copy=False)[:] = imp_currents_to
+
+            res_impedance["pl_mw"].to_numpy(copy=False)[:] = imp_power_from.real + imp_power_to.real
+            res_impedance["ql_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag + imp_power_to.imag
+        # -- calculate ward results --
+        # res_ward reports the TWO halves recombined, as pandapower does:
+        #     p_mw = ps_mw + vm**2 * pz_mw ,  q_mvar = qs_mvar + vm**2 * qz_mvar
+        # (_get_pq_results writes the constant-power part, then results_bus adds the
+        # voltage-dependent impedance part on top). Note q uses +qz_mvar here: the sign
+        # flip lives only in the Ybus stamp (BS = -qz_mvar), not in the reported demand.
+        if "ward" in self._ybus_elements and "ward" in net and len(net.ward):
+            net.res_ward = _ensure_index(net.res_ward, net.ward.index)
+            wards = self._ybus_elements["ward"]
+            vm_ward = vm[wards._from_bus]
+
+            res_ward = net.res_ward
+            res_ward["vm_pu"].to_numpy(copy=False)[:] = vm_ward
+            res_ward["p_mw"].to_numpy(copy=False)[:] = wards._ps_mw + vm_ward**2 * wards._pz_mw
+            res_ward["q_mvar"].to_numpy(copy=False)[:] = wards._qs_mvar + vm_ward**2 * wards._qz_mvar
+
         # -- calculate gen results --
-        net.res_gen = _ensure_index(net.res_gen, net.gen.index)
-        gen_bus = net.res_bus.loc[self.pf_objects["PVPQ"]._pv]
-        gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
-        res_gen = net.res_gen
+        if "gen" in self._ybus_elements and "gen" in net and len(net.gen):
+            net.res_gen = _ensure_index(net.res_gen, net.gen.index)
+            gen_bus = net.res_bus.loc[self.pf_objects["PVPQ"]._pv]
+            gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
+            res_gen = net.res_gen
 
-        # vm/va are per-bus quantities -> broadcast to every gen on that bus
-        res_gen["vm_pu"].to_numpy(copy=False)[:] = gen_bus.vm_pu.to_numpy(copy=False)
-        res_gen["va_degree"].to_numpy(copy=False)[:] = gen_bus.va_degree.to_numpy(copy=False)
+            # vm/va are per-bus quantities -> broadcast to every gen on that bus
+            res_gen["vm_pu"].to_numpy(copy=False)[:] = gen_bus.vm_pu.to_numpy(copy=False)
+            res_gen["va_degree"].to_numpy(copy=False)[:] = gen_bus.va_degree.to_numpy(copy=False)
 
-        # direct copy
-        res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
+            # direct copy
+            res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
 
-        # total Q injected at each PV bus (per-bus), then split across gens on that bus
-        q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
-        # equal split: divide each bus's Q by the number of gens on it
-        gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
-        res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
-        # res_gen['q_mvar'].to_numpy(copy=False)[:] = -1 * gen_bus.q_mvar.to_numpy(copy=False) - \
-        #   self._sBus[self.pf_objects['PVPQ']._pv].imag * net.sn_mva
-
-        # gen_q_mvar = SBus.imag * net.sn_mva #+ bus[gbus, QD]
+            # total Q injected at each PV bus (per-bus), then split across gens on that bus
+            q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
+            # equal split: divide each bus's Q by the number of gens on it
+            gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
+            res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
 
         # -- calculate ext_grid results --
         net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
@@ -419,6 +455,9 @@ class NewtonPowerflow:
             # PV buses. Since a PV bus holds |V| fixed during the solve, an unrestored
             # 1.0 here is never corrected and propagates a large error to neighbours.
             pv_vm = np.abs(voltage[pv]) if len(pv) > 0 else None
+            # Same for PQ: the seed magnitude there is the mean generator set point
+            # (see mean_setpoint_vm), not 1.0 pu, and _pre_dc_solve would reset it.
+            pq_vm = np.abs(voltage[pq]) if len(pq) > 0 else None
             # DC init solves B*theta = P_inj. P_inj is the real bus power injection
             # (self._sBus.real) PLUS the transformer phase-shift injection
             # (self._p_shift). Two prior bugs are fixed here: (1) self._Bbus is ALREADY
@@ -434,9 +473,11 @@ class NewtonPowerflow:
                 ref=self.busses["ref"],
                 pvpq=pvpq,
             )
-            # Restore PV magnitudes (keep the DC-estimated angle).
+            # Restore PV and PQ magnitudes (keep the DC-estimated angle).
             if len(pv) > 0:
                 voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))
+            if len(pq) > 0:
+                voltage[pq] = pq_vm * np.exp(1j * np.angle(voltage[pq]))
 
         # CSR arrays of Ybus, passed zero-copy into the C++ solver (no .tolist()).
         # scipy guarantees C-contiguous indptr/indices/data, and the dtype casts
@@ -447,7 +488,6 @@ class NewtonPowerflow:
         pv_i = np.ascontiguousarray(pv, dtype=np.int32)
         pq_i = np.ascontiguousarray(pq, dtype=np.int32)
         Sbus = np.ascontiguousarray(self._sBus, dtype=np.complex128)
-        # V0 = np.ascontiguousarray(voltage, dtype=np.complex128)
 
         # Build (or reuse) the cached solver. The KLU symbolic analyze depends
         # only on the topology (Yp/Yj/pv/pq), so it is done once and reused while
@@ -550,11 +590,11 @@ class NewtonPowerflow:
         pv_i = np.ascontiguousarray(self.busses["pv"], dtype=np.int32)
         pq_i = np.ascontiguousarray(self.busses["pq"], dtype=np.int32)
 
-        if not Yp.flags.c_contiguous or not Yp.dtype == np.int32:
+        if not Yp.flags.c_contiguous or Yp.dtype != np.int32:
             Yp = np.ascontiguousarray(Yp, dtype=np.int32)
-        if not Yj.flags.c_contiguous or not Yj.dtype == np.int32:
+        if not Yj.flags.c_contiguous or Yj.dtype != np.int32:
             Yj = np.ascontiguousarray(Yj, dtype=np.int32)
-        if not Yx.flags.c_contiguous or not Yx.dtype == np.complex128:
+        if not Yx.flags.c_contiguous or Yx.dtype != np.complex128:
             Yx = np.ascontiguousarray(Yx, dtype=np.complex128)
 
         nnz = Yj.shape[0]
@@ -588,4 +628,4 @@ class NewtonPowerflow:
             raise LoadflowNotConverged(
                 f"C++ batch did not converge for {n_bad} of {T} time steps in {max_iterations} iterations."
             )
-        return result["V"]  # (n_bus, T)
+        return result["V"]

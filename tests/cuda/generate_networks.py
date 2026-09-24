@@ -1,13 +1,23 @@
 # SPDX-FileCopyrightText: 2026 Fraunhofer IEE
 #
 # SPDX-License-Identifier: BSD-3-Clause
+"""Module for loading and processing power system test cases.
+
+This module provides functionalities to manage power system test cases, including
+the addition of profiles and controllers using Simbench. It supports loading networks
+from JSON files or directly from test case definitions. If Simbench profiles are
+available, they are applied to the networks.
+
+It is needed for timeseries test, to prepare networks with timeseries data.
+
+"""
 
 import os
 
 import pandapower.networks.power_system_test_cases as pstc
 from pandapower.file_io import from_json, to_json
 
-from tests.get_load_gen_matrix import extract_timeseries
+from tests.util import extract_timeseries
 
 try:
     import simbench as sb

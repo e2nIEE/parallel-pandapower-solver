@@ -140,7 +140,7 @@ def solve_contingency(net, group, reslack_islands: bool = False) -> ContingencyR
     n_bus = len(work.bus)
     vm = np.full(n_bus, np.nan)
     va = np.full(n_bus, np.nan)
-    converged = False
+
     try:
         pp.runpp(work, init="flat")
         converged = bool(work["converged"])

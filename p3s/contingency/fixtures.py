@@ -34,7 +34,7 @@ from __future__ import annotations
 import numpy as np
 import pandapower as pp
 
-from p3s.calculateTrafoTapTable import calculateTrafoCharacteristic
+from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 
 # Generator short-circuit columns required for the optional island re-slacking
 # (lowest-Z generator becomes the island reference). Populated only where a fixture
@@ -203,7 +203,7 @@ def tapped_trafo():
 
     # p3s's trafo model reads tap data from net.trafo_characteristic_table /
     # net.trafo.id_characteristic_table -- populate them so the fixture is ready to use.
-    calculateTrafoCharacteristic(net, inplace=True)
+    calculate_trafo_characteristic(net, inplace=True)
 
     _add_outage_group_columns(net)
     net.trafo.loc[t, "outage_group"] = "trafo"

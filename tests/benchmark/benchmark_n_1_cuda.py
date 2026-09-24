@@ -10,7 +10,7 @@ seeing where wall-clock goes at a given grid size / contingency count (e.g. when
 larger grids in future). Most of the non-solve time is serial Python/numpy host prep, part
 of which the CPU path shares.
 
-    python -m p3s.contingency.benchmark_n_1_cuda --limit 2000 --gpu-max-chunk 1024
+    python -m tests.benchmark.benchmark_n_1_cuda --limit 2000 --gpu-max-chunk 1024
 
 Prints a phase breakdown (ms + % of total) and ms/contingency.
 """

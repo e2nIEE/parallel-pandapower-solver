@@ -13,3 +13,4 @@ parallel pandapower solver
     installation
     usage
     benchmark
+    build

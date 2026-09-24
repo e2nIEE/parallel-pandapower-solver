@@ -25,9 +25,13 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import TypeVar
 
 import numpy as np
 from benchmark_batched import BenchmarkResults, MethodResults
+from benchmark_n_1_pegase import BenchmarkResults as N1BenchmarkResults
+
+T = TypeVar("T")
 
 COLORS = [
     (57 / 256, 55 / 256, 139 / 256),  # fh-8
@@ -37,6 +41,11 @@ COLORS = [
     (253 / 256, 195 / 256, 0 / 256),  # fh-20
     (235 / 256, 106 / 256, 10 / 256),  # fh-16
 ]
+
+
+class Res[T]:
+    def __init__(self, res: T):
+        self.results: T = res
 
 
 def method_results_compare(m1: MethodResults, m2: MethodResults, ts1: str, ts2: str) -> MethodResults:
@@ -109,7 +118,7 @@ def find_result_files(output_dir):
     return json_files
 
 
-def load_result_file(filepath) -> BenchmarkResults:
+def load_result_file(filepath) -> BenchmarkResults | N1BenchmarkResults:
     """Load a single result JSON file."""
     with open(filepath) as f:
         return json.load(f)
@@ -567,15 +576,160 @@ def generate_time_vs_bus_graph(
         plt.close()
 
 
+def generate_n_1_graph(results: N1BenchmarkResults, output_dir: str) -> None:
+    """Generate time vs core count graphs.
+
+    Y-axis: time_ms converted to seconds (log scale)
+    X-axis: core count
+    """
+    import matplotlib.pyplot as plt
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    plt.rcParams["axes.titlesize"] = 32
+    plt.rcParams["axes.labelsize"] = 24
+    plt.rcParams["xtick.labelsize"] = 24
+    plt.rcParams["ytick.labelsize"] = 24
+    plt.rcParams["legend.fontsize"] = 24
+
+    methods_in_data: set[str] = set()
+    methods_in_data.update(results["methods"].keys())
+
+    color_map = {}
+    colors = COLORS
+    for i, method in enumerate(sorted(methods_in_data)):
+        color_map[method] = colors[i % len(colors)]
+        color_map[f"{method}_per"] = colors[(i + 1) % len(colors)]
+
+    all_cases = set()
+    all_cases.add(results["case"])
+
+    plt.figure(figsize=(18, 8))
+
+    if "cpp" in methods_in_data:
+        threads_count: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["cpp"]:
+            threads_count.append(md["threads"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["cpp"]
+        plt.plot(
+            threads_count,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        plt.xlabel("Thread count")
+        plt.xticks(threads_count)
+        plt.ylabel("time (s)")
+        plt.title("Time vs Thread Count for n-1 Contingency Analysis")
+
+        # plt.xscale("log")
+        # plt.yscale("log")
+
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=0.5)
+        plt.savefig(
+            output_path / "n-1_times.png",
+            dpi=150,
+        )
+        plt.close()
+
+    if "gpu" in methods_in_data:
+        plt.figure(figsize=(18, 8))
+        chunk_sizes: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["gpu"]:
+            chunk_sizes.append(md["chunk_size"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["gpu"]
+        plt.plot(
+            chunk_sizes,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        plt.xlabel("Chunk Size")
+        plt.xticks(chunk_sizes)
+        plt.ylabel("time (s)")
+        plt.title("Time vs Chunk Size for n-1 Contingency Analysis on GPU")
+
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=0.5)
+        plt.savefig(
+            output_path / "n-1_chunks.png",
+            dpi=150,
+        )
+        plt.close()
+
+    if "cpp" in methods_in_data and "gpu" in methods_in_data:
+        fig, ax1 = plt.subplots(figsize=(18, 8))
+
+        chunk_sizes: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["gpu"]:
+            chunk_sizes.append(md["chunk_size"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["gpu"]
+        ax1.plot(
+            chunk_sizes,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        ax1.set_xlabel("Chunk Size")
+        ax1.set_xticks(chunk_sizes)
+
+        ax2 = ax1.twiny()
+
+        threads_count: list[int] = []
+        time_list: list[float] = []
+        for md in results["methods"]["cpp"]:
+            threads_count.append(md["threads"])
+            time_list.append(md["time_ms"][0] / 1000)
+
+        color = color_map["cpp"]
+        ax2.plot(
+            threads_count,
+            time_list,
+            marker="o",
+            color=color,
+        )
+
+        ax2.set_xlabel("Thread count")
+        ax2.set_xticks(threads_count)
+
+        plt.ylabel("time (s)")
+        plt.title("Times for n-1 Contingency Analysis on CPU vs GPU")
+
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout(pad=0.5)
+        plt.savefig(
+            output_path / "n-1_both.png",
+            dpi=150,
+        )
+        plt.close()
+
+
 def compile_results(
     output_dir,
     method_filter=None,
-    generate_graphs=True,
-    include_partial=False,
-    include_error_unknown=False,
-    include_fail=False,
-    include_not_available=False,
-    use_global_extrema=False,
+    generate_graphs: bool = True,
+    include_partial: bool = False,
+    include_error_unknown: bool = False,
+    include_fail: bool = False,
+    include_not_available: bool = False,
+    use_global_extrema: bool = False,
 ):
     """Compile all results into a pandas DataFrame.
 
@@ -636,6 +790,35 @@ def compile_results(
     return combined
 
 
+def compile_results_n_1(
+    output_dir,
+    generate_graphs: bool = True,
+):
+    """Compile results into a pandas DataFrame.
+
+    Args:
+        output_dir: Directory containing result JSON files
+        generate_graphs: Whether to generate graphs
+    """
+    json_files = find_result_files(output_dir)
+    if len(json_files) != 1:
+        raise UserWarning("None or more than one results file found. For n-1 only one results file is supported.")
+
+    try:
+        results: N1BenchmarkResults = load_result_file(json_files[0])
+    except Exception as e:
+        print(f"Failed to load results from {json_files[0]}: {e}")
+
+    print("\nLoaded result file")
+
+    if generate_graphs:
+        print("\nGenerating graphs...")
+        generate_n_1_graph(results, output_dir)
+        print(f"Graphs saved to: {output_dir}")
+
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compile benchmark results from multiple job runs",
@@ -647,6 +830,8 @@ Examples:
     python compile_results.py --method gpu
     python compile_results.py --include-partial --include-error-unknown
     python compile_results.py --use-global-extrema
+
+    python compile_results.py --n-1
         """,
     )
 
@@ -659,7 +844,7 @@ Examples:
     parser.add_argument(
         "--method",
         type=str,
-        help="Filter by method (pp,grav,gpu,cpp-1thr,cpp-Nthr)",
+        help="Filter by method (pp,p3s,gpu,cpp-1thr,cpp-Nthr)",
     )
     parser.add_argument(
         "--no-graphs",
@@ -691,22 +876,29 @@ Examples:
         action="store_true",
         help="Use global extrema for timesteps graph (default: per-method extrema)",
     )
+    parser.add_argument("--n-1", action="store_true", help="Generate the graph for n-1 contingency results.")
 
     args = parser.parse_args()
 
     print(f"Loading results from: {args.output_dir}")
 
     try:
-        compile_results(
-            args.output_dir,
-            method_filter=args.method,
-            generate_graphs=not args.no_graphs,
-            include_partial=args.include_partial,
-            include_error_unknown=args.include_error_unknown,
-            include_fail=args.include_fail,
-            include_not_available=args.include_not_available,
-            use_global_extrema=args.use_global_extrema,
-        )
+        if args.n_1:
+            compile_results_n_1(
+                args.output_dir,
+                generate_graphs=not args.no_graphs,
+            )
+        else:
+            compile_results(
+                args.output_dir,
+                method_filter=args.method,
+                generate_graphs=not args.no_graphs,
+                include_partial=args.include_partial,
+                include_error_unknown=args.include_error_unknown,
+                include_fail=args.include_fail,
+                include_not_available=args.include_not_available,
+                use_global_extrema=args.use_global_extrema,
+            )
     except ValueError as e:
         print(f"Failed to compile the results: {e}")
         return 1

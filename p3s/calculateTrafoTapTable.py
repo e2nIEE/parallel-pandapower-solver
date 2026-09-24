@@ -8,8 +8,25 @@ from numpy.typing import NDArray
 from pandapower.auxiliary import pandapowerNet
 
 
-def calculateTrafoCharacteristic(net: pandapowerNet, inplace: bool = False):
+def calculate_trafo_characteristic(net: pandapowerNet, inplace: bool = False):
+    """Calculates the transformer characteristic parameters, including voltage ratio, phase angle
+    shift, and short-circuit impedance components for each transformer in the network.
 
+    The function processes the tap positions, transformer parameters, and optional tap changer
+    types to compute the characteristic data for each transformer. This output can be stored directly
+    within the network or returned as a separate DataFrame depending on the `inplace` parameter.
+
+    Args:
+        net: The pandapowerNet object containing the transformer and associated network data.
+        inplace: Boolean flag indicating whether results should be updated directly in the
+            pandapowerNet object (True) or returned as a DataFrame (False).
+
+    Returns:
+        DataFrame with transformer characteristic parameters for all transformers in the
+        network. Each entry includes voltage ratio, phase angle shift, and short-circuit
+        impedance components, among others. Returns None if `inplace` is True.
+    """
+    # TODO: finish this function and port it to pandapower!
     # tap_min = net.trafo["tap_min"]
     # tap_max = net.trafo["tap_max"]
     tap_pos = net.trafo["tap_pos"]
@@ -51,7 +68,6 @@ def calculateTrafoCharacteristic(net: pandapowerNet, inplace: bool = False):
         tap[idx] = 1.0 + 0j
 
     def _ratio(idx):
-        # voltages[idx] *= (tap_pos[idx] - tap_neutral[idx]) * tap_st_per[idx] / 100.
         ratios[idx] = 1 + (tap_pos[idx] - tap_neutral[idx]) * tap_step_percent[idx] / 100.0
         tap[idx] = ratios[idx] * np.exp(1j * np.deg2rad(tap_step_degree[idx]))
 
@@ -112,12 +128,3 @@ def calculateTrafoCharacteristic(net: pandapowerNet, inplace: bool = False):
         return None
     else:
         return df
-
-
-if __name__ == "__main__":
-    import pandapower.networks as nw
-
-    net = nw.case14()
-
-    calculateTrafoCharacteristic(net, inplace=True)
-    pass
