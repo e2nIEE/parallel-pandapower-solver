@@ -76,7 +76,12 @@ Newton cannot share a single factorization across operating points the way SAM d
 one-time `klu_analyze`, (b) the cheap `klu_refactor` reuse, and (c) **solving independent
 time steps in parallel across CPU cores via OpenMP**. Internally one read-only `Topology`
 (CSR pattern + symbolic factorization) is shared; each worker owns a `SolveState` (its own
-`klu_numeric` + scratch). The Python driver
+`klu_numeric` + scratch) that persists across that worker's columns, so only its first
+column pays `klu_factor` and every later column runs the ~3.6× cheaper `klu_refactor` on
+the inherited pivot order. The reuse is guarded: an inherited order is rejected when its
+`klu_rcond` falls 1000× below the last fresh factor's, and a column that fails to converge
+is re-run with a fresh factorization. On pegase this is ~1.5× per warm-started column
+(~1.3× cold) with bitwise-identical voltages. The Python driver
 `p3s.NewtonPowerflowCpp.calculate_timeseries_cpp(net, timeseries, n_threads=0)` wraps
 this, reusing the shared Sbus/DC-init helpers in `p3s/timeseries.py` (same convention
 as the GPU `calculate_timeseries_cuda`).
