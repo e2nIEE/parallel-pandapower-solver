@@ -18,13 +18,15 @@ from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
 from p3s.models.TransmissionLineModel import TransmissionLineModel
 from p3s.models.TwoPort import TwoPort
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
+from p3s.models.WardModel import WardModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
+from p3s.q_capability import resolve_q_limits
 from p3s.timeseries import mean_setpoint_vm
 
 
 class NewtonPowerflow:
-    def __init__(self, net: pandapowerNet):
+    def __init__(self, net: pandapowerNet, enforce_q_lims: bool = False):
         self.pf_objects: dict[str, PowerflowObject] = {}
         self._sBus: NDArray = None
         self._YBus: sparse = None
@@ -36,6 +38,7 @@ class NewtonPowerflow:
         # keeping a reference on all classes which create the ybus.
         self._ybus_elements: dict[str, TwoPort | ThreePort] = {}
         self.busses: dict = {}
+        self.enforce_q_lims: bool = enforce_q_lims
         self._setup_pf(net)
 
     def make_ybus(self, net: pandapowerNet) -> tuple[sparse, sparse]:
@@ -87,6 +90,17 @@ class NewtonPowerflow:
             Ybus_dat.extend(Ybus_trafos3w.data)
             Ybus_row.extend(Ybus_trafos3w.row)
             Ybus_col.extend(Ybus_trafos3w.col)
+
+        # A ward is an ACTIVE element: only its constant-impedance half (pz/qz) can be
+        # stamped here. The constant-power half (ps/qs) is picked up from
+        # ``wards.s_bus`` in _setup_pf, which runs after make_ybus.
+        if "ward" in net and len(net.ward) > 0:
+            wards = WardModel(net.ward, n_bus=n_bus, sn_mva=net.sn_mva)
+            self._ybus_elements["ward"] = wards
+            Ybus_wards = wards.create_y_matrix(n_bus=n_bus)
+            Ybus_dat.extend(Ybus_wards.data)
+            Ybus_row.extend(Ybus_wards.row)
+            Ybus_col.extend(Ybus_wards.col)
 
         if "shunt" in net and len(net.shunt) > 0:
             shunts = ShuntModel(net.shunt, sn_mva=net.sn_mva)
@@ -142,7 +156,25 @@ class NewtonPowerflow:
 
         if "sgen" in net and len(net["sgen"]) > 0:
             net.sgen["_lookup"] = self._lookup[net.sgen.bus].values.astype(int)
-            res_mw = (net.sgen.p_mw + net.sgen.q_mvar * 1j) * net.sgen.scaling * net.sgen.in_service
+
+            # Reactive capability limits. An sgen is a PQ injection: its q_mvar is an
+            # INPUT, so "enforcing" a limit means clipping the requested Q to the machine's
+            # capability at its dispatched P -- there is no bus-type switch to make and no
+            # outer loop needed, because P does not change during a PQ solve.
+            q_sgen = net.sgen.q_mvar
+            if self.enforce_q_lims:
+                limits = resolve_q_limits(net, "sgen")
+                if limits is not None:
+                    q_min, q_max = limits
+                    # NaN limit = unlimited on that side; clip only where finite.
+                    q_clipped = np.clip(
+                        q_sgen.to_numpy(dtype=float),
+                        np.where(np.isnan(q_min), -np.inf, q_min),
+                        np.where(np.isnan(q_max), np.inf, q_max),
+                    )
+                    q_sgen = pd.Series(q_clipped, index=net.sgen.index)
+
+            res_mw = (net.sgen.p_mw + q_sgen * 1j) * net.sgen.scaling * net.sgen.in_service
 
             _sgen = -1.0 * res_mw.groupby(net.sgen["_lookup"]).sum()
             sBus = sBus.add(_sgen, fill_value=0)
@@ -175,6 +207,13 @@ class NewtonPowerflow:
         # This is what pandapower's init = "auto" does, and it saves Newton iterations.
         if len(pq) > 0:
             self._initial_voltage[pq] = mean_setpoint_vm(net)
+
+        # Constant-power half of the ward equivalents. The shunt half is already in Ybus
+        # (see make_ybus); this adds ps/qs as an ordinary PQ demand. A ward has no
+        # scaling column -- pandapower hardcodes scaling = 1.0 for ward/xward -- and
+        # out-of-service wards were zeroed when the model was built.
+        if "ward" in self._ybus_elements:
+            sBus = sBus.add(pd.Series(self._ybus_elements["ward"].s_bus), fill_value=0)  # type: ignore[union-attr]
 
         self._sBus = -1.0 * sBus.values / net.sn_mva  # type: ignore[operator]
         self.pf_objects["PVPQ"] = PQPVPowerflow(YBus=self._YBus, pv=pv, pq=pq, ref=ref)
@@ -289,6 +328,22 @@ class NewtonPowerflow:
                 trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
             )
             res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
+
+        # -- calculate ward results --
+        # res_ward reports the TWO halves recombined, as pandapower does:
+        #     p_mw = ps_mw + vm**2 * pz_mw ,  q_mvar = qs_mvar + vm**2 * qz_mvar
+        # (_get_pq_results writes the constant-power part, then results_bus adds the
+        # voltage-dependent impedance part on top). Note q uses +qz_mvar here: the sign
+        # flip lives only in the Ybus stamp (BS = -qz_mvar), not in the reported demand.
+        if "ward" in self._ybus_elements and "ward" in net and len(net.ward):
+            net.res_ward = _ensure_index(net.res_ward, net.ward.index)
+            wards = self._ybus_elements["ward"]
+            vm_ward = vm[wards._from_bus]
+
+            res_ward = net.res_ward
+            res_ward["vm_pu"].to_numpy(copy=False)[:] = vm_ward
+            res_ward["p_mw"].to_numpy(copy=False)[:] = wards._ps_mw + vm_ward**2 * wards._pz_mw
+            res_ward["q_mvar"].to_numpy(copy=False)[:] = wards._qs_mvar + vm_ward**2 * wards._qz_mvar
 
         # -- calculate gen results --
         # Only nets with generators do the gen-result maths: "_lookup" is added to net.gen
