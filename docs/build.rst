@@ -60,7 +60,7 @@ From an index
 
 .. code-block:: bash
 
-   pip install p3s[cpp]        # pulls in the published p3s-cpp distribution
+   pip install parallel-pandapower-solver[cpp]        # pulls in the published p3s-cpp distribution
 
 From a source checkout
 ~~~~~~~~~~~~~~~~~~~~~~

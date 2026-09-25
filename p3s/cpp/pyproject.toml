@@ -4,7 +4,7 @@
 
 # Build definition for the compiled C++ power-flow extension, shipped as a SEPARATE
 # distribution `p3s-cpp` so the base `p3s` install stays pure-Python. Users
-# opt in with `pip install p3s[cpp]`, which pulls this in and compiles `nr_klu`
+# opt in with `pip install parallel-pandapower-solver[cpp]`, which pulls this in and compiles `nr_klu`
 # (KLU-backed Newton-Raphson) into the p3s package via CMake / scikit-build-core.
 #
 # Build it directly with:  pip install ./p3s/cpp

@@ -7,7 +7,7 @@ project(p3s_cpp LANGUAGES CXX)
 
 # Portable build for the nr_klu pybind11 extension (fast single-grid Newton-Raphson
 # power flow on KLU). Driven by scikit-build-core via p3s/cpp/pyproject.toml, so
-# `pip install p3s[cpp]` builds it the same way on Linux, macOS and Windows.
+# `pip install parallel-pandapower-solver[cpp]` builds it the same way on Linux, macOS and Windows.
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

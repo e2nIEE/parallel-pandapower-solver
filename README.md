@@ -51,7 +51,7 @@ Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because 
 Installs the separate `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s package so `from p3s import nr_klu` works.
 
 ```bash
-pip install p3s[cpp]              # from an index (published p3s-cpp)
+pip install parallel-pandapower-solver[cpp]              # from an index (published p3s-cpp)
 pip install .[cpp]                # from a checkout (see note below)
 ```
 
