@@ -20,17 +20,17 @@ endif()
 # -march=native / /arch:AVX2 are great for a local build but break redistributable
 # wheels (the binary refuses to start on a host without the ISA), so both compilers
 # gate host tuning behind the same option.
-option(GRAVITON_CPP_NATIVE "Tune for the build host CPU (-march=native / /arch:AVX2)" ON)
+option(P3S_CPP_NATIVE "Tune for the build host CPU (-march=native / /arch:AVX2)" ON)
 if(MSVC)
   add_compile_options(/O2 /fp:fast /EHsc)
   # MSVC's default x64 target is SSE2: 2-wide doubles and no FMA. eval_F_and_J is a
   # streaming sincos + multiply-add loop over the Ybus nonzeros, so the width matters.
-  if(GRAVITON_CPP_NATIVE)
+  if(P3S_CPP_NATIVE)
     add_compile_options(/arch:AVX2)
   endif()
 else()
   add_compile_options(-O3 -funroll-loops -ffast-math)
-  if(GRAVITON_CPP_NATIVE)
+  if(P3S_CPP_NATIVE)
     add_compile_options(-march=native)
   endif()
 endif()

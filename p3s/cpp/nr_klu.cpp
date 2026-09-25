@@ -275,9 +275,8 @@ static void build_J_pattern(Topology& w) {
 //   dQ_i/dVm_j =  Vm_i*Ym_ij*sin(delta)           (block 3)
 // Diagonal terms accumulate the negative row-sum (for dVa) and special dVm.
 //
-// We follow the convention used in graviton/loadflow_csr.cpp (verified against
-// the scipy reference). To keep diagonal accumulation correct we compute, per
-// Ybus row, the four "dPQ_dVma"-style data arrays exactly like loadflow_csr,
+// To keep diagonal accumulation correct we compute, per Ybus row,
+// the four "dPQ_dVma"-style data arrays exactly like loadflow_csr,
 // then gather into J via (src_k, src_block).
 // ----------------------------------------------------------------------------
 // Fused: in ONE traversal of Ybus, compute both the bus power injections P/Q
@@ -844,7 +843,7 @@ py::dict solve_single(
 // ----------------------------------------------------------------------------
 // Stateful solver: amortizes topology-dependent setup (pattern build + KLU
 // symbolic analyze) across many solves on the SAME grid topology. This is the
-// common graviton case: one network, many load/generation profiles.
+// common p3s case: one network, many load/generation profiles.
 //
 //   s = Solver(Yp, Yj, Yx, pv, pq, ordering=0, btf=0)   # analyze ONCE
 //   V = s.solve(Sbus, V0)                                # many times, cheap
