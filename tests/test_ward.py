@@ -25,7 +25,7 @@ from pandapower.run import runpp
 from p3s.models.WardModel import WardModel
 from p3s.NewtonPowerflow import NewtonPowerflow
 
-# pandapower and graviton must be compared at the SAME convergence tolerance: at the
+# pandapower and p3s must be compared at the SAME convergence tolerance: at the
 # default 1e-5 the two solvers stop at slightly different points and agree only to ~1e-9,
 # which would hide a real modelling error.
 TOL = 1e-12
