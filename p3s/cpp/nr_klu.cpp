@@ -497,11 +497,12 @@ static thread_local NewtonProfile g_prof;
 
 // Backtracking line-search parameters (compile-time; not exposed to Python).
 //
-// A full (alpha=1) step is ALWAYS tried first. It is accepted whenever it satisfies the
-// Armijo SUFFICIENT-DECREASE test (below) -- true for good full steps -- so on well-
-// behaved grids the search never backtracks and the only cost is one mismatch-norm
-// evaluation per iteration, REUSED as the next iteration's convergence check (net zero
-// extra work). Backtracking only engages when the full step overshoots.
+// A full (alpha=1) step is ALWAYS tried first, scored with eval_F_and_J itself: the F and
+// J it builds at the full-step point are exactly what the next iteration needs, so an
+// accepted full step -- true for good full steps -- costs nothing beyond the one
+// eval_F_and_J an iteration needs anyway. Backtracking only engages when the full step
+// overshoots; its trials use the cheaper eval_F_norm, and eval_F_and_J is then re-run
+// at the accepted point.
 //
 // Acceptance is Armijo, not plain "any decrease": accept alpha iff
 //     ||F(V + alpha*dV)||  <=  (1 - ARMIJO_C * alpha) * ||F(V)|| .
@@ -589,47 +590,62 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
         NRP_ACC(tp_k0, t_klu_ms, n_klu);
 
         // --- step + guarded Armijo backtracking line search --------------------
-        // Try the full Newton step first. If it passes the Armijo sufficient-decrease test
-        // (the common case near the solution), accept it -- and reuse its norm as the next
-        // iteration's convergence check, so the fast path adds no extra mismatch evals.
-        // Only on overshoot do we backtrack, each trial costing one cheap eval_F_norm
-        // (no Jacobian, no factor, no solve). A helper forms V + alpha*dV into Vm_ls/Va_ls.
+        // Score the full Newton step with eval_F_and_J directly: if it is accepted (always
+        // when line_search is off; on Armijo sufficient decrease otherwise -- the common
+        // case near the solution), the F and J it just built at the new point are the ones
+        // the next iteration needs, so the step costs a single mismatch pass. Only on
+        // overshoot do we backtrack, each trial costing one cheap eval_F_norm (no Jacobian,
+        // no factor, no solve), then rebuild F and J at the accepted point. Overwriting F
+        // and Jx at a rejected point is harmless: backtracking needs only the scalar `nrm`,
+        // the step `rhs` and the committed Vm/Va, and Jx is already factored.
+        // A helper forms V + alpha*dV into Vm_ls/Va_ls.
         auto form_trial = [&](double a) {
             for (int i = 0; i < topo.n; ++i) { Vm_ls[i] = Vm[i]; Va_ls[i] = Va[i]; }
             for (int i = 0; i < npvpq; ++i) Va_ls[topo.pvpq[i]] += a * rhs[i];
             for (int i = 0; i < npq;   ++i) Vm_ls[topo.pq[i]]   += a * rhs[npvpq + i];
         };
 
-        NRP_T0(tp_l0);
-        double alpha = 1.0;
-        double nrm_new = nrm;
-        double best_alpha = 1.0, best_nrm = std::numeric_limits<double>::infinity();
-        for (int trial = 0; trial <= (line_search ? LS_MAX_TRIALS : 0); ++trial) {
-            form_trial(alpha);
-            nrm_new = eval_F_norm(topo, st, Vm_ls, Va_ls);
-            if (nrm_new < best_nrm) { best_nrm = nrm_new; best_alpha = alpha; }
-            // Fast path when disabled: take the single alpha=1 evaluation as-is.
-            // Otherwise accept on Armijo sufficient decrease.
-            if (!line_search || nrm_new <= (1.0 - ARMIJO_C * alpha) * nrm) break;
-            if (trial == LS_MAX_TRIALS) {
-                // No alpha passed Armijo -> commit the least-bad (smallest-residual) trial.
-                if (best_alpha != alpha) { form_trial(best_alpha); nrm_new = best_nrm; }
-                break;
-            }
-            alpha *= LS_BETA;
+        auto commit_trial = [&]() {
+            for (int i = 0; i < npvpq; ++i) Va[topo.pvpq[i]] = Va_ls[topo.pvpq[i]];
+            for (int i = 0; i < npq;   ++i) Vm[topo.pq[i]]   = Vm_ls[topo.pq[i]];
+        };
+        auto f_norm = [&]() {
+            double n = 0; for (int i = 0; i < topo.m; ++i) n = std::max(n, std::fabs(F[i]));
+            return n;
+        };
+
+        form_trial(1.0);
+        eval_F_and_J(topo, st, Vm_ls, Va_ls, st.Pspec.data(), st.Qspec.data(), F);
+        const double nrm_full = f_norm();
+        if (!line_search || nrm_full <= (1.0 - ARMIJO_C) * nrm) {
+            commit_trial();
+            nrm = nrm_full;
+            continue;
         }
         NRP_ACC(tp_l0, t_ls_ms, n_ls);
 
-        // commit the accepted trial voltage (currently held in Vm_ls/Va_ls)
-        for (int i = 0; i < npvpq; ++i) Va[topo.pvpq[i]] = Va_ls[topo.pvpq[i]];
-        for (int i = 0; i < npq;   ++i) Vm[topo.pq[i]]   = Vm_ls[topo.pq[i]];
+        // Full step rejected: backtrack over alpha = LS_BETA, LS_BETA^2, ... (the same
+        // alphas as always tried after alpha=1), keeping the least-bad trial in case none
+        // passes Armijo -- the full step itself is a candidate for that.
+        double alpha = 1.0;
+        double best_alpha = 1.0, best_nrm = nrm_full;
+        for (int trial = 1; trial <= LS_MAX_TRIALS; ++trial) {
+            alpha *= LS_BETA;
+            form_trial(alpha);
+            const double nrm_new = eval_F_norm(topo, st, Vm_ls, Va_ls);
+            if (nrm_new < best_nrm) { best_nrm = nrm_new; best_alpha = alpha; }
+            if (nrm_new <= (1.0 - ARMIJO_C * alpha) * nrm) break;
+            if (trial == LS_MAX_TRIALS) {
+                // No alpha passed Armijo -> commit the least-bad (smallest-residual) trial.
+                if (best_alpha != alpha) form_trial(best_alpha);
+                break;
+            }
+        }
+        commit_trial();
 
-        // Rebuild F and J at the accepted point for the next iteration's solve; the norm
-        // is recomputed here (it equals nrm_new, but eval_F_and_J is needed anyway for J).
-        NRP_T0(tp_e1);
+        // Rebuild F and J at the accepted point for the next iteration's solve.
         eval_F_and_J(topo, st, Vm, Va, st.Pspec.data(), st.Qspec.data(), F);
-        NRP_ACC(tp_e1, t_eval_ms, n_eval);
-        nrm = 0; for (int i = 0; i < topo.m; ++i) nrm = std::max(nrm, std::fabs(F[i]));
+        nrm = f_norm();
     }
     return {it, converged};
 }
