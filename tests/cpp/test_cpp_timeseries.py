@@ -96,6 +96,7 @@ def test_batch_column_reuse_matches_fresh_solves(n_threads):
     Sbus = np.stack([npf._sBus * k for k in scales], axis=1)
 
     s = nr_klu.Solver(*args)
+    assert s.lean_active  # refactorization runs on the lean static-pivot kernel
     rb = s.solve_batch(Sbus, V0, n_threads=n_threads)
     assert not rb["converged"][2] and rb["converged"].sum() == len(scales) - 1
 

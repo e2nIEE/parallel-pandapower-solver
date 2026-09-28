@@ -44,6 +44,7 @@
 extern "C" {
 #include <klu.h>
 }
+#include "lean_lu.hpp"
 
 namespace py = pybind11;
 using cd = std::complex<double>;
@@ -111,6 +112,12 @@ struct Topology {
     klu_common SymCommon;
     klu_symbolic* Symbolic = nullptr;
 
+    // Lean static-pivot refactorization plan (lean_lu.hpp): KLU's pivot order and L/U
+    // pattern, frozen from one klu_factor of the flat-start Jacobian in build_topology.
+    // Every Newton iteration refactors on it; KLU proper is only the fallback. Invalid
+    // (and unused) if that factorization failed or BTF split the matrix into blocks.
+    LeanLU lean;
+
     ~Topology() {
         if (Symbolic) klu_free_symbolic(&Symbolic, &SymCommon);
     }
@@ -161,6 +168,12 @@ struct SolveState {
     bool   check_reuse = false;
     double rcond_fresh = 0.0;
 
+    // Lean refactorization buffers (only when topo.lean is valid). `use_lean` is reset to
+    // true at the start of every solve; run_newton clears it when the frozen pivot order
+    // is rejected for this operating point, which hands the rest of the solve to KLU.
+    std::vector<double> LU, lu_x, lu_y;
+    bool use_lean = true;
+
     explicit SolveState(const Topology& topo) {
         Jx.assign(topo.Ji.size(), 0.0);
         Vm.assign(topo.n, 0.0);
@@ -172,6 +185,11 @@ struct SolveState {
         F.assign(topo.m, 0.0);
         rhs.assign(topo.m, 0.0);
         klu_defaults(&Common);
+        if (topo.lean.valid) {
+            LU.assign(topo.lean.nnz(), 0.0);
+            lu_x.assign(topo.m, 0.0);
+            lu_y.assign(topo.m, 0.0);
+        }
     }
     ~SolveState() {
         if (Numeric) klu_free_numeric(&Numeric, &Common);
@@ -557,8 +575,23 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
         // return non-converged rather than throwing -- which would abort an entire batch
         // for one bad contingency.
         NRP_T0(tp_k0);
-        bool need_factor = !st.factored;
-        if (!need_factor) {
+        // Lean path: refactor on the topology's frozen pivot order (lean_lu.hpp) and solve.
+        // Rejected if its pivot ratio falls REUSE_RCOND_RATIO below the plan's own; KLU
+        // then takes over for the rest of this solve, starting with a fresh pivoting factor.
+        bool lean_done = false;
+        if (st.use_lean && topo.lean.valid) {
+            const double rc = lean_refactor(topo.lean, st.Jx.data(), st.LU.data(), st.lu_x.data());
+            if (rc >= REUSE_RCOND_RATIO * topo.lean.rcond0) {
+                for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
+                lean_solve(topo.lean, st.LU.data(), rhs, st.lu_y.data());
+                lean_done = true;
+            } else {
+                st.use_lean = false;
+                st.drop_numeric();
+            }
+        }
+        bool need_factor = !lean_done && !st.factored;
+        if (!lean_done && !need_factor) {
             int ok = klu_refactor(const_cast<int*>(topo.Jp.data()),
                                   const_cast<int*>(topo.Ji.data()),
                                   st.Jx.data(), topo.Symbolic, st.Numeric, &st.Common);
@@ -584,9 +617,11 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
             st.rcond_fresh = klu_rcond(topo.Symbolic, st.Numeric, &st.Common) ? st.Common.rcond : 0.0;
         }
 
-        for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
-        if (!klu_solve(topo.Symbolic, st.Numeric, topo.m, 1, rhs, &st.Common))
-            return {it, false};
+        if (!lean_done) {
+            for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
+            if (!klu_solve(topo.Symbolic, st.Numeric, topo.m, 1, rhs, &st.Common))
+                return {it, false};
+        }
         NRP_ACC(tp_k0, t_klu_ms, n_klu);
 
         // --- step + guarded Armijo backtracking line search --------------------
@@ -650,6 +685,24 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
     return {it, converged};
 }
 
+// Freeze KLU's pivot order and L/U pattern for the lean refactorization (Topology::lean).
+// The pivots are chosen once, on the Jacobian at a flat voltage (|V|=1, angle 0) -- an
+// operating-point-free matrix of the right structure -- so every solve and every thread
+// shares one order, and results do not depend on which thread solved what. Leaves the
+// plan invalid (pure KLU) if anything fails.
+static void build_lean_plan(Topology& topo) {
+    SolveState s(topo);                    // plan not valid yet -> no lean buffers
+    std::fill(s.Vm.begin(), s.Vm.end(), 1.0);
+    eval_F_and_J(topo, s, s.Vm.data(), s.Va.data(), s.Pspec.data(), s.Qspec.data(), s.F.data());
+
+    klu_common c;
+    klu_defaults(&c);
+    klu_numeric* N = klu_factor(topo.Jp.data(), topo.Ji.data(), s.Jx.data(), topo.Symbolic, &c);
+    if (!N) return;
+    lean_build(topo.lean, topo.m, topo.Jp.data(), topo.Ji.data(), topo.Symbolic, N, &c);
+    klu_free_numeric(&N, &c);
+}
+
 // Build the shared Topology (pattern + symbolic analyze) from CSR Ybus + pv/pq.
 static void build_topology(Topology& topo,
                            const int* Yp, const int* Yj, const std::complex<double>* Yx,
@@ -677,6 +730,7 @@ static void build_topology(Topology& topo,
     topo.SymCommon.btf = btf;
     topo.Symbolic = klu_analyze(topo.m, topo.Jp.data(), topo.Ji.data(), &topo.SymCommon);
     if (!topo.Symbolic) throw std::runtime_error("klu_analyze failed");
+    build_lean_plan(topo);
 }
 
 // Run `body(t)` for t in [0, T): serially if n_threads<=1 or OpenMP is unavailable,
@@ -707,9 +761,9 @@ static void run_batch_loop(Body&& body, int T, int n_threads) {
 // One SolveState per worker thread for the batch paths. Building a fresh SolveState per
 // column made every column pay a full klu_factor (~3.6 refactors on pegase, plus the LU
 // allocation) before it could refactor; with warm starts (~2-3 iterations) that was ~45%
-// of the column. A pooled state keeps its Numeric, so only a thread's first column
-// factors and every later column refactors on the inherited pivot order (guarded, see
-// run_column). Each slot is touched only by its own thread.
+// of the column. A pooled state keeps its buffers and (KLU fallback) its Numeric; with a
+// valid lean plan no column needs a klu_factor at all (see run_column). Each slot is
+// touched only by its own thread.
 class SolveStatePool {
 public:
     explicit SolveStatePool(const Topology& topo) : topo_(topo), slots_(max_workers()) {}
@@ -744,20 +798,23 @@ private:
 };
 
 // Solve one batch column on a pooled state. `init(s)` loads the column's inputs (Sbus,
-// V0, optional Ybus values / pin mask) into s. If the state arrives already factored,
-// the column reuses the previous column's pivot order: run_newton checks the first
-// refactor's rcond, and a column that then fails to converge is re-run from scratch with
-// a fresh klu_factor -- so a reused pivot order can cost time but never a result the
+// V0, optional Ybus values / pin mask) into s. The column runs on a pivot order it did
+// not choose itself -- the topology's lean plan, or (KLU fallback) the order the state
+// inherited from its previous column -- and run_newton guards both by pivot ratio. A
+// column that still fails to converge is re-run from scratch on KLU with a fresh,
+// pivoting klu_factor, so a reused pivot order can cost time but never a result the
 // per-column fresh factorization would have produced.
 template <typename Init>
 static NewtonResult run_column(const Topology& topo, SolveState& s, Init&& init,
                                int max_iter, double tol, bool line_search) {
-    const bool reused = s.factored;
+    const bool reused = s.factored || topo.lean.valid;
     init(s);
-    s.check_reuse = reused;
+    s.use_lean = true;
+    s.check_reuse = s.factored;
     NewtonResult nr = run_newton(topo, s, max_iter, tol, line_search);
     if (nr.converged || !reused) return nr;
     s.drop_numeric();
+    s.use_lean = false;
     init(s);
     return run_newton(topo, s, max_iter, tol, line_search);
 }
@@ -928,6 +985,7 @@ public:
             st->Pspec[i] = Sb(i).real(); st->Qspec[i] = Sb(i).imag();
             st->Vm[i] = std::abs(V0(i)); st->Va[i] = std::arg(V0(i));
         }
+        st->use_lean = true;
         NewtonResult nr = run_newton(topo, *st, max_iter, tol, line_search);
 
         py::array_t<std::complex<double>> Vout(n);
@@ -1207,6 +1265,10 @@ public:
         py::dict r; r["Jp"] = Jp; r["Ji"] = Ji; r["Jx"] = Jx; r["m"] = topo.m; return r;
     }
 
+    // True when solves refactor on the lean static-pivot plan (lean_lu.hpp) rather than
+    // klu_refactor.
+    bool lean_active() const { return topo.lean.valid; }
+
 private:
     Topology topo;                       // shared, read-only during solves
     std::unique_ptr<SolveState> st;      // persistent state for sequential solve()
@@ -1245,6 +1307,8 @@ PYBIND11_MODULE(nr_klu, m) {
              py::arg("ordering") = 0, py::arg("btf") = 0)
         .def("update_Y", &Solver::update_Y, py::arg("Yx"),
              "Refresh Ybus values without redoing the symbolic analyze.")
+        .def_property_readonly("lean_active", &Solver::lean_active,
+             "True when refactorization uses the lean static-pivot kernel (KLU is fallback).")
         .def("solve", &Solver::solve,
              py::arg("Sbus"), py::arg("V0"), py::arg("max_iter") = 30, py::arg("tol") = 1e-8,
              py::arg("line_search") = true)
