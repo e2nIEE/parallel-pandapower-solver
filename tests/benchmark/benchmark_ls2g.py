@@ -11,8 +11,8 @@ BENCHMARK.md) so neither side wins by using a better linear solver.
 
 Two comparable regimes, mirroring ``benchmark_batched.py``'s cpp-1thr / cpp-Nthr split:
 
-  * ``ls2g-1thr`` / ``grav-1thr``  -- single-threaded batch of T independent solves.
-  * ``ls2g-Nthr`` / ``grav-Nthr``  -- same batch, all CPU cores.
+  * ``ls2g-1thr`` / ``p3s-1thr``  -- single-threaded batch of T independent solves.
+  * ``ls2g-Nthr`` / ``p3s-Nthr``  -- same batch, all CPU cores.
 
 "Independent" matters: p3s's ``calculate_timeseries_cpp`` DC-initialises every step
 from scratch (so steps can run in any order / any thread) rather than warm-starting step
@@ -55,8 +55,8 @@ except ImportError:
 
 warnings.filterwarnings("ignore", message="Matrix is exactly singular")
 
-type methods_type = Literal["grav-1thr", "grav-Nthr", "ls2g-1thr", "ls2g-Nthr"]
-ALL_METHODS: list[methods_type] = ["grav-1thr", "grav-Nthr", "ls2g-1thr", "ls2g-Nthr"]
+type methods_type = Literal["p3s-1thr", "p3s-Nthr", "l2g-1thr", "l2g-Nthr"]
+ALL_METHODS: list[methods_type] = ["p3s-1thr", "p3s-Nthr", "l2g-1thr", "l2g-Nthr"]
 
 
 class MethodResults(TypedDict):
@@ -111,7 +111,7 @@ def _vm_err(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.abs(np.abs(a) - np.abs(b)).max())
 
 
-def run_grav_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int) -> MethodResults:
+def run_p3s_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int) -> MethodResults:
     """p3s nr_klu batch (independent DC-initialised steps, OpenMP over n_threads)."""
     result: MethodResults = MethodResults(status="success", time_ms=[], results=[], max_vm_error=[], errors=[])
 
@@ -148,7 +148,7 @@ def run_grav_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int)
 
 def run_ls2g_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int) -> MethodResults:
     """lightsim2grid InjectionSweepCPP batch, pinned to NR_KLU, independent steps from a
-    shared flat-start Vinit -- the same regime as run_grav_benchmark."""
+    shared flat-start Vinit -- the same regime as run_p3s_benchmark."""
     if not _HAS_LS2G:
         return MethodResults(
             status="not_available",
@@ -215,7 +215,7 @@ def run_ls2g_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int)
 
 
 def _compute_vm_errors(baseline, method_results) -> list[float | None]:
-    """Max |Vm| error per T against the grav-1thr baseline. p3s returns (n_bus, T)
+    """Max |Vm| error per T against the p3s-1thr baseline. p3s returns (n_bus, T)
     per step; lightsim2grid returns (T, n_bus) -- both compared as |V| over the same
     pandapower bus ordering (bus indices are 0..n-1 and contiguous for every case here)."""
     if not baseline or not method_results or len(baseline) != len(method_results):
@@ -250,10 +250,10 @@ def benchmark(net: pandapowerNet, methods: list[methods_type], timesteps: list[i
     )
 
     method_functions = {
-        "grav-1thr": lambda n, t: run_grav_benchmark(n, t, n_threads=1),
-        "grav-Nthr": lambda n, t: run_grav_benchmark(n, t, n_threads=0),
-        "ls2g-1thr": lambda n, t: run_ls2g_benchmark(n, t, n_threads=1),
-        "ls2g-Nthr": lambda n, t: run_ls2g_benchmark(n, t, n_threads=0),
+        "p3s-1thr": lambda n, t: run_p3s_benchmark(n, t, n_threads=1),
+        "p3s-Nthr": lambda n, t: run_p3s_benchmark(n, t, n_threads=0),
+        "l2g-1thr": lambda n, t: run_ls2g_benchmark(n, t, n_threads=1),
+        "l2g-Nthr": lambda n, t: run_ls2g_benchmark(n, t, n_threads=0),
     }
 
     for m in methods:
@@ -272,7 +272,7 @@ def parse_args():
         "-m",
         type=str,
         default="all",
-        help="Comma-separated: grav-1thr, grav-Nthr, ls2g-1thr, ls2g-Nthr, or 'all'",
+        help="Comma-separated: p3s-1thr, p3s-Nthr, ls2g-1thr, ls2g-Nthr, or 'all'",
     )
     parser.add_argument("--T", "-t", type=int, nargs="+", default=None)
     parser.add_argument("--output-dir", "-o", type=str, default=None)
@@ -319,12 +319,12 @@ if __name__ == "__main__":
     results = benchmark(net, methods_to_run, t_list)
     results["job_id"] = args.job_id or "no_job_id"
 
-    # Validate every method against grav-1thr (the reference: same DC-init-per-step
+    # Validate every method against p3s-1thr (the reference: same DC-init-per-step
     # convention as pandapower/p3s's own scipy-loop baseline in benchmark_batched.py).
-    if "grav-1thr" in results["methods"] and results["methods"]["grav-1thr"]["results"]:
-        baseline = results["methods"]["grav-1thr"]["results"]
+    if "p3s-1thr" in results["methods"] and results["methods"]["p3s-1thr"]["results"]:
+        baseline = results["methods"]["p3s-1thr"]["results"]
         for method_name, method_data in results["methods"].items():
-            if method_name == "grav-1thr":
+            if method_name == "p3s-1thr":
                 method_data["max_vm_error"] = [0.0] * len(baseline)
                 continue
             if not method_data.get("results"):

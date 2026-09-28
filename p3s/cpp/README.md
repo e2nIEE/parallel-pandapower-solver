@@ -29,10 +29,16 @@ level up into the `p3s` package so it imports as `from p3s import nr_klu`.
 - **Constant sparsity pattern.** The Jacobian structure does not change across NR
   iterations, so the CSR pattern is built **once**; the linear solver does its symbolic
   analyze once and only re-numbers values afterwards.
-- **KLU linear solve** (SuiteSparse): `klu_analyze` once, `klu_factor` on iteration 1,
-  then the much cheaper `klu_refactor` on every later iteration (reuses the pivot
-  ordering). Tuned with `btf=0` (a connected PF grid is one irreducible block, so BTF
-  only adds cost) and AMD ordering (denser, slower with COLAMD).
+- **KLU ordering + lean refactorization**: `klu_analyze` once (AMD, `btf=0` -- a
+  connected PF grid is one irreducible block, so BTF only adds cost; COLAMD gives a
+  denser factor). When the `Solver` is built, one `klu_factor` of the flat-start Jacobian
+  fixes the pivot order and L/U pattern, and every Newton iteration then refactors on it
+  with the static-pivot column kernel in `lean_lu.hpp` -- the same algorithm as
+  `klu_refactor` without KLU's packed storage and per-call permutation/scaling overhead,
+  ~1.35-1.5x faster on pegase. KLU stays the fallback: an iteration whose pivot ratio
+  falls 1000x below the plan's switches that solve to `klu_factor`/`klu_refactor`
+  (`Solver.lean_active` reports whether the plan is in use). Building the plan costs
+  about one extra factorization (~11 ms on pegase9241), paid once per `Solver`.
 
 The Jacobian layout (unknowns `x = [Δθ(pvpq); ΔVm(pq)]`):
 
@@ -75,13 +81,13 @@ Newton cannot share a single factorization across operating points the way SAM d
 (KLU is single-matrix / single-RHS), so the batch speedup comes from (a) amortizing the
 one-time `klu_analyze`, (b) the cheap `klu_refactor` reuse, and (c) **solving independent
 time steps in parallel across CPU cores via OpenMP**. Internally one read-only `Topology`
-(CSR pattern + symbolic factorization) is shared; each worker owns a `SolveState` (its own
-`klu_numeric` + scratch) that persists across that worker's columns, so only its first
-column pays `klu_factor` and every later column runs the ~3.6× cheaper `klu_refactor` on
-the inherited pivot order. The reuse is guarded: an inherited order is rejected when its
-`klu_rcond` falls 1000× below the last fresh factor's, and a column that fails to converge
-is re-run with a fresh factorization. On pegase this is ~1.5× per warm-started column
-(~1.3× cold) with bitwise-identical voltages. The Python driver
+(CSR pattern, symbolic factorization and the lean refactorization plan) is shared; each
+worker owns a `SolveState` (LU values, KLU fallback numeric, scratch) that persists across
+that worker's columns, so no column pays a fresh `klu_factor` and every thread refactors on
+the same pivot order (results are thread-invariant). A column that fails to converge is
+re-run from scratch on KLU with a fresh, pivoting factorization. On pegase the per-thread
+reuse is ~1.5× per warm-started column over a fresh factorization per column, and the lean
+kernel a further ~1.15× (1 thread) to ~1.3× (8 threads). The Python driver
 `p3s.NewtonPowerflowCpp.calculate_timeseries_cpp(net, timeseries, n_threads=0)` wraps
 this, reusing the shared Sbus/DC-init helpers in `p3s/timeseries.py` (same convention
 as the GPU `calculate_timeseries_cuda`).
