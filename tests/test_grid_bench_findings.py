@@ -53,7 +53,7 @@ from pandapower.create import (
     create_transformer3w_from_parameters,
     create_transformer_from_parameters,
 )
-from pandapower.run import runpp
+from pandapower.run import rundcpp, runpp
 
 from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.NewtonPowerflowCpp import NewtonPowerflow
@@ -378,8 +378,10 @@ def test_symmetrical_tap_changer_powerflow():
     _assert_matches_pandapower(net)
 
 
-def _net_trafo3w(pfe_kw: float = 25.0, i0_percent: float = 0.06) -> pandapowerNet:
-    net = create_empty_network(sn_mva=1.0)
+def _net_trafo3w(
+    pfe_kw: float = 25.0, i0_percent: float = 0.06, net_sn_mva: float = 1.0, vn=(110.0, 20.0, 10.0), **extra
+) -> pandapowerNet:
+    net = create_empty_network(sn_mva=net_sn_mva)
     hv = create_bus(net, vn_kv=110.0)
     mv = create_bus(net, vn_kv=20.0)
     lv = create_bus(net, vn_kv=10.0)
@@ -389,9 +391,9 @@ def _net_trafo3w(pfe_kw: float = 25.0, i0_percent: float = 0.06) -> pandapowerNe
         hv,
         mv,
         lv,
-        vn_hv_kv=110.0,
-        vn_mv_kv=20.0,
-        vn_lv_kv=10.0,
+        vn_hv_kv=vn[0],
+        vn_mv_kv=vn[1],
+        vn_lv_kv=vn[2],
         sn_hv_mva=40.0,
         sn_mv_mva=25.0,
         sn_lv_mva=15.0,
@@ -403,10 +405,19 @@ def _net_trafo3w(pfe_kw: float = 25.0, i0_percent: float = 0.06) -> pandapowerNe
         vkr_lv_percent=0.3,
         pfe_kw=pfe_kw,
         i0_percent=i0_percent,
+        **extra,
     )
     create_load(net, mv, p_mw=15.0, q_mvar=5.0)
     create_load(net, lv, p_mw=8.0, q_mvar=2.0)
     return net
+
+
+def _kron_reduced_ybus(ref: pandapowerNet, net: pandapowerNet) -> np.ndarray:
+    """pandapower's Ybus with its auxiliary (trafo3w star) buses eliminated."""
+    y = ref._ppc["internal"]["Ybus"].toarray()
+    keep = ref._pd2ppc_lookups["bus"][net.bus.index.values]
+    star = np.setdiff1d(np.arange(y.shape[0]), keep)
+    return y[np.ix_(keep, keep)] - y[np.ix_(keep, star)] @ np.linalg.solve(y[np.ix_(star, star)], y[np.ix_(star, keep)])
 
 
 TRAFO3W_LOSSES = pytest.mark.parametrize("pfe_kw, i0_percent", [(25.0, 0.06), (0.0, 0.0)], ids=["mag", "no_mag"])
@@ -421,30 +432,154 @@ def test_trafo3w_without_characteristic_table_builds():
 
 @TRAFO3W_LOSSES
 def test_trafo3w_ybus_matches_pandapower(pfe_kw, i0_percent):
-    """Not visible on grid-bench (the NA crash comes first): with a characteristic row
-    supplied by hand, p3s's trafo3w stamp is off by factors 0.5-2.5 against pandapower,
-    and all-NaN without magnetising branch (pfe_kw = i0_percent = 0).
+    """Not visible on grid-bench (the NA crash came first): the former trafo3w stamp was off by
+    factors 0.5-2.5 against pandapower, and all-NaN without magnetising branch (pfe_kw =
+    i0_percent = 0, the star-node elimination divided by y_mag).
 
     pandapower models the trafo3w with an auxiliary star bus; Kron-reduce it away to
     compare against p3s's bus-only Ybus."""
     net = _net_trafo3w(pfe_kw, i0_percent)
     ref = copy.deepcopy(net)
     runpp(ref)
-    y = ref._ppc["internal"]["Ybus"].toarray()
-    keep = ref._pd2ppc_lookups["bus"][net.bus.index.values]
-    star = np.setdiff1d(np.arange(y.shape[0]), keep)
-    y_red = y[np.ix_(keep, keep)] - y[np.ix_(keep, star)] @ np.linalg.solve(
-        y[np.ix_(star, star)], y[np.ix_(star, keep)]
-    )
-
     calculate_trafo_characteristic(net, inplace=True)
     npf = NewtonPowerflow(net)
-    np.testing.assert_allclose(npf._YBus.toarray(), y_red, atol=1e-8)
+    np.testing.assert_allclose(npf._YBus.toarray(), _kron_reduced_ybus(ref, net), atol=1e-8)
 
 
 @TRAFO3W_LOSSES
 def test_trafo3w_powerflow(pfe_kw, i0_percent):
     _assert_matches_pandapower(_net_trafo3w(pfe_kw, i0_percent))
+
+
+T3_TAP = dict(tap_neutral=0, tap_min=-8, tap_max=8, tap_step_percent=1.5, tap_changer_type="Ratio")
+# pandapower drops a tap_at_star_point tap whose tap_step_degree is NaN (its star-point correction
+# multiplies by exp(1j*deg2rad(NaN))), so the star-point cases set tap_step_degree=0 explicitly.
+T3_STAR = dict(tap_at_star_point=True, tap_step_degree=0.0, **T3_TAP)
+TRAFO3W_CASES = {
+    "plain": {},
+    "net_sn_100": dict(net_sn_mva=100.0),
+    "off_nominal": dict(vn=(115.0, 21.0, 10.5)),
+    "shifts": dict(shift_mv_degree=150.0, shift_lv_degree=330.0),
+    "tap_hv": dict(tap_side="hv", tap_pos=3, **T3_TAP),
+    "tap_mv": dict(tap_side="mv", tap_pos=-2, **T3_TAP),
+    "tap_lv": dict(tap_side="lv", tap_pos=2, **T3_TAP),
+    "tap_hv_star": dict(tap_side="hv", tap_pos=3, **T3_STAR),
+    "tap_mv_star": dict(tap_side="mv", tap_pos=-2, **T3_STAR),
+    "tap_lv_star": dict(tap_side="lv", tap_pos=2, **T3_STAR),
+    "phase_tap_mv_star": dict(tap_side="mv", tap_pos=3, **{**T3_STAR, "tap_step_degree": 30.0}),
+    "ideal_lv_shifts": dict(
+        tap_side="lv",
+        tap_pos=-3,
+        tap_neutral=0,
+        tap_min=-8,
+        tap_max=8,
+        tap_step_degree=2.5,
+        tap_changer_type="Ideal",
+        shift_mv_degree=150.0,
+        shift_lv_degree=330.0,
+    ),
+    "everything": dict(vn=(115.0, 21.0, 10.5), tap_side="mv", tap_pos=-2, shift_mv_degree=30.0, **T3_STAR),
+}
+LOSS_SIDES = pytest.mark.parametrize("loss_side", ["hv", "mv", "lv", "star"])
+
+
+@LOSS_SIDES
+@pytest.mark.parametrize("case", list(TRAFO3W_CASES))
+def test_trafo3w_ybus_and_dc_match_pandapower(case, loss_side):
+    """AC stamp, DC B-matrix and DC phase-shift injection against pandapower (runpp/rundcpp with
+    trafo3w_losses=loss_side), for every loss side and tap placement."""
+    net = _net_trafo3w(**TRAFO3W_CASES[case])
+    net.trafo3w["loss_side"] = loss_side
+    ref = copy.deepcopy(net)
+    runpp(ref, trafo3w_losses=loss_side)
+    dc = copy.deepcopy(net)
+    rundcpp(dc, trafo3w_losses=loss_side, calculate_voltage_angles=True)
+
+    calculate_trafo_characteristic(net, inplace=True)
+    npf = NewtonPowerflow(net)
+    np.testing.assert_allclose(npf._YBus.toarray(), _kron_reduced_ybus(ref, net), rtol=1e-10, atol=1e-10)
+
+    # DC: B theta = P + p_shift with the slack (bus 0) at 0 deg
+    pvpq = np.arange(1, len(net.bus))
+    p = (npf._sBus.real + npf._p_shift)[pvpq]
+    theta = np.linalg.solve(npf._Bbus.toarray()[np.ix_(pvpq, pvpq)], p)
+    va_dc = (np.rad2deg(theta) - dc.res_bus.va_degree.values[pvpq] + 180.0) % 360.0 - 180.0
+    np.testing.assert_allclose(va_dc, 0.0, atol=1e-8)
+
+
+def test_trafo3w_loss_side_default_is_pandapower():
+    """Without a loss_side column the magnetising branch sits on the hv branch (trafo3w_losses="hv")."""
+    net = _net_trafo3w()
+    assert "loss_side" not in net.trafo3w
+    ref = copy.deepcopy(net)
+    runpp(ref)  # pandapower's default trafo3w_losses="hv"
+    calculate_trafo_characteristic(net, inplace=True)
+    np.testing.assert_allclose(NewtonPowerflow(net)._YBus.toarray(), _kron_reduced_ybus(ref, net), atol=1e-10)
+
+
+def _net_trafo3w_parallel(in_service: bool) -> pandapowerNet:
+    """Two trafo3w in parallel, the second one switchable -- the grid stays connected without it."""
+    net = _net_trafo3w(tap_side="mv", tap_pos=-2, shift_lv_degree=150.0, **T3_TAP)
+    t = net.trafo3w.iloc[0]
+    create_transformer3w_from_parameters(
+        net,
+        t.hv_bus,
+        t.mv_bus,
+        t.lv_bus,
+        vn_hv_kv=110.0,
+        vn_mv_kv=20.0,
+        vn_lv_kv=10.0,
+        sn_hv_mva=30.0,
+        sn_mv_mva=20.0,
+        sn_lv_mva=10.0,
+        vk_hv_percent=11.0,
+        vk_mv_percent=9.0,
+        vk_lv_percent=7.0,
+        vkr_hv_percent=0.35,
+        vkr_mv_percent=0.3,
+        vkr_lv_percent=0.25,
+        pfe_kw=18.0,
+        i0_percent=0.05,
+        shift_lv_degree=150.0,
+        in_service=in_service,
+    )
+    return net
+
+
+@pytest.mark.parametrize("solve", ["cpp", "python"])
+@pytest.mark.parametrize("in_service", [True, False], ids=["both_in_service", "one_out_of_service"])
+def test_res_trafo3w_matches_pandapower(in_service, solve):
+    net = _net_trafo3w_parallel(in_service)
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8)
+    if solve == "cpp":
+        npf, v = _solve_p3s(net)
+        npf._parse_results(net, v)
+    else:
+        from p3s.NewtonPowerflow import NewtonPowerflow as NewtonPowerflowPy
+
+        calculate_trafo_characteristic(net, inplace=True)
+        NewtonPowerflowPy(net).calculate(net, init="flat", tolerance=1e-8, max_iterations=30)
+
+    on = net.trafo3w.in_service.to_numpy(bool)
+    for column in ref.res_trafo3w.columns:
+        expected = ref.res_trafo3w[column].to_numpy(float)
+        actual = net.res_trafo3w[column].to_numpy(float)
+        np.testing.assert_allclose(actual[on], expected[on], rtol=1e-6, atol=1e-6, err_msg=column)
+    # out of service: no flow, no loading, no internal voltage (pandapower's aux bus is out of service)
+    off = ~on
+    for column in ("p_hv_mw", "q_mv_mvar", "p_lv_mw", "pl_mw", "i_hv_ka", "loading_percent"):
+        np.testing.assert_allclose(net.res_trafo3w[column].to_numpy(float)[off], 0.0, atol=1e-12, err_msg=column)
+    assert np.isnan(net.res_trafo3w.vm_internal_pu.to_numpy(float)[off]).all()
+
+
+def test_out_of_service_trafo3w_is_absent():
+    net = _net_trafo3w_parallel(in_service=False)
+    calculate_trafo_characteristic(net, inplace=True)
+    model = NewtonPowerflow(net)._ybus_elements["trafo3w"]
+    for name in ("_Y_11", "_Y_23", "_Y_32", "_DC_Y_11", "_DC_Y_13"):
+        assert getattr(model, name)[1] == 0 and getattr(model, name)[0] != 0
+    assert len(model._Y_11) == len(net.trafo3w)
 
 
 def _net_tabular_phase_shifter() -> pandapowerNet:

@@ -106,6 +106,13 @@ class NewtonPowerflow:
             Ybus_row.extend(Ybus_trafos3w.row)
             Ybus_col.extend(Ybus_trafos3w.col)
 
+            Bbus_trafos3w = trafo3ws.create_y_dc_matrix(n_bus=n_bus)
+            Bbus_dat.extend(Bbus_trafos3w.data)
+            Bbus_row.extend(Bbus_trafos3w.row)
+            Bbus_col.extend(Bbus_trafos3w.col)
+
+            self._p_shift += trafo3ws.p_shift
+
         # A ward is an ACTIVE element: only its constant-impedance half (pz/qz) can be
         # stamped here. The constant-power half (ps/qs) is picked up from
         # ``wards.s_bus`` in _setup_pf, which runs after make_ybus.
@@ -303,6 +310,12 @@ class NewtonPowerflow:
                 trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
             )
             res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
+
+        # -- calculate trafo3w results --
+        if "trafo3w" in self._ybus_elements and "trafo3w" in net and len(net.trafo3w):
+            net.res_trafo3w = _ensure_index(net.res_trafo3w, net.trafo3w.index)
+            for column, values in self._ybus_elements["trafo3w"].results(voltage, net.sn_mva).items():
+                net.res_trafo3w[column] = values
 
         # -- calculate impedance results --
         # res_impedance has no vm_*/va_*/loading_percent columns (an impedance carries no

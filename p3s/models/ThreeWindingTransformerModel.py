@@ -2,11 +2,49 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""Three-winding transformer as a three-port.
+
+Equivalent circuit (positive sequence, per unit of net.sn_mva on the transformer's rated voltages):
+three winding branches z_hv, z_mv, z_lv meet at an internal star node. The star node is a property
+of the equivalent circuit (delta -> star of the three pair short-circuit impedances), not the
+neutral of a Y winding; the vector group only enters as the phase shifts shift_mv/lv_degree.
+
+  1. pair impedances z_hm, z_ml, z_hl from vk/vkr_hv/mv/lv_percent, each per unit of the smaller
+     rating of its two windings (vk_hv: hv-mv, vk_mv: mv-lv, vk_lv: hv-lv)
+  2. star branches   z_hv = (z_hm + z_hl - z_ml) / 2, z_mv = (z_hm + z_ml - z_hl) / 2,
+                     z_lv = (z_hl + z_ml - z_hm) / 2
+  3. every branch k is a pi: series y_k, shunt y_a,k at its terminal end, shunt y_b,k at its star
+     end (only the loss-side branch has shunts), plus a shunt y_0 at the star node (loss_side "star")
+  4. ideal transformers: V_bus,k = t_k * V'_k at the terminal and V_b,k = s_k * V_star at the star
+     end of branch k, t_k = vn_k,rated / vn_k,bus * exp(-j*shift_k) * N_k (tap at the terminal),
+     s_k = N_k (tap_at_star_point), N_k = voltage_ratio * exp(j*angle_deg) of the tap side's row in
+     net.trafo_characteristic_table (1 on the other windings)
+  5. star node eliminated (rank-1 update):
+         Y'  = diag(y + y_a) - (y*s) (y*conj(s))^T / S,   S = y_0 + sum_k |s_k|^2 (y_k + y_b,k)
+         Y_ij = Y'_ij / (conj(t_i) * t_j)
+
+This reproduces pandapower's trafo3w (three equivalent 2W trafos around an auxiliary star bus),
+including its magnetising position: the T-model on the loss-side branch (loss_side "hv"/"mv"/"lv",
+default "hv" as pandapower's trafo3w_losses) or a shunt at the star node ("star").
+"""
+
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 from pandas import DataFrame
 
 from p3s.models.ThreePort import ThreePort
+
+SIDES = ("hv", "mv", "lv")
+LOSS_SIDES = ("hv", "mv", "lv", "star")
+
+
+def _pair_impedance(vk_percent, vkr_percent, sn_a, sn_b, sn_mva) -> NDArray:
+    """Short-circuit impedance between two windings, per unit of sn_mva (rated voltages)."""
+    base = sn_mva / np.minimum(sn_a, sn_b)
+    r = vkr_percent / 100.0 * base
+    x = np.sqrt(np.square(vk_percent / 100.0 * base) - np.square(r))
+    return r + 1j * x
 
 
 class ThreeWindingTransformerModel(ThreePort):
@@ -17,178 +55,176 @@ class ThreeWindingTransformerModel(ThreePort):
         tap_table: DataFrame,
         trafo3w_model: str = "t",
         sn_mva: float = 1.0,
+        loss_side: str = "hv",  # pandapower's default for trafo3w_losses
     ):
-
+        """
+        Args:
+            trafo3w_table: net.trafo3w
+            bus_table: net.bus
+            tap_table: net.trafo_characteristic_table (MultiIndex id_characteristic / step)
+            trafo3w_model: only "t" (the pandapower model)
+            sn_mva: net.sn_mva
+            loss_side: where the magnetising branch sits for rows without a ``loss_side`` value:
+                "hv", "mv", "lv" (middle of that winding's branch) or "star" (star node)
+        """
         super().__init__()
-        self._hv_bus = trafo3w_table["hv_bus"].values
-        self._mv_bus = trafo3w_table["mv_bus"].values
-        self._lv_bus = trafo3w_table["lv_bus"].values
+        if trafo3w_model != "t":
+            raise UserWarning(f"Trafo3w Model: {trafo3w_model}, not supported. Only t is available.")
+        if loss_side not in LOSS_SIDES:
+            raise ValueError(f"loss_side must be one of {LOSS_SIDES}, got {loss_side!r}")
 
-        self.voltages_hv = bus_table.loc[self._hv_bus, "vn_kv"]
-        self.voltages_mv = bus_table.loc[self._mv_bus, "vn_kv"]
-        self.voltages_lv = bus_table.loc[self._lv_bus, "vn_kv"]
+        t3 = trafo3w_table
+        n = len(t3)
+        self._hv_bus = t3["hv_bus"].to_numpy()
+        self._mv_bus = t3["mv_bus"].to_numpy()
+        self._lv_bus = t3["lv_bus"].to_numpy()
 
-        # Input Values
-        tap_pos = trafo3w_table["tap_pos"].fillna(0.0).astype(int).values
-        id_characteristic_table = trafo3w_table["id_characteristic_table"].astype(int).values
+        # per element and side (columns hv, mv, lv)
+        self.sn = np.stack([t3[f"sn_{s}_mva"].to_numpy(dtype=float) for s in SIDES], axis=1)
+        self.vn_rated = np.stack([t3[f"vn_{s}_kv"].to_numpy(dtype=float) for s in SIDES], axis=1)
+        self.vn_bus = np.stack([bus_table.loc[t3[f"{s}_bus"], "vn_kv"].to_numpy(dtype=float) for s in SIDES], axis=1)
 
-        i0_percent = trafo3w_table["i0_percent"].values
-        pfe_mw = trafo3w_table["pfe_kw"].values / 1000.0
+        # -- tap state from the characteristic table -----------------------------------------
+        tap_pos: NDArray = t3["tap_pos"].fillna(0.0).to_numpy(dtype=float).astype(int)
+        ids = t3["id_characteristic_table"].to_numpy(dtype=int)
+        tap_row = tap_table.index.get_indexer(pd.MultiIndex.from_arrays([ids, tap_pos]))
+        if (tap_row < 0).any():
+            missing = list(zip(ids[tap_row < 0], tap_pos[tap_row < 0], strict=True))
+            raise KeyError(
+                f"trafo_characteristic_table has no row for trafo3w (id_characteristic, step) {missing}; "
+                "run calculate_trafo_characteristic(net, inplace=True)"
+            )
 
-        n = len(id_characteristic_table)
+        def _row(column: str) -> NDArray:
+            return tap_table[column].to_numpy(dtype=float)[tap_row]
 
-        angle_deg = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "angle_deg"] for i in range(n)], dtype=float
-        )
-        voltage_ratio = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "voltage_ratio"] for i in range(n)], dtype=float
-        )
+        # -- 1./2. pair impedances and star branches ---------------------------------------
+        z_hm = _pair_impedance(_row("vk_hv_percent"), _row("vkr_hv_percent"), self.sn[:, 0], self.sn[:, 1], sn_mva)
+        z_ml = _pair_impedance(_row("vk_mv_percent"), _row("vkr_mv_percent"), self.sn[:, 1], self.sn[:, 2], sn_mva)
+        z_hl = _pair_impedance(_row("vk_lv_percent"), _row("vkr_lv_percent"), self.sn[:, 0], self.sn[:, 2], sn_mva)
+        z = 0.5 * np.stack([z_hm + z_hl - z_ml, z_hm + z_ml - z_hl, z_hl + z_ml - z_hm], axis=1)
+        if np.any(z == 0):
+            raise UserWarning("Equivalent star branch of a trafo3w with zero impedance!")
 
-        vk_hv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_hv_percent"] for i in range(n)], dtype=float
-        )
-        vkr_hv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_hv_percent"] for i in range(n)], dtype=float
-        )
-
-        vk_mv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_mv_percent"] for i in range(n)], dtype=float
-        )
-        vkr_mv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_mv_percent"] for i in range(n)], dtype=float
-        )
-
-        vk_lv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vk_lv_percent"] for i in range(n)], dtype=float
-        )
-        vkr_lv = np.array(
-            [tap_table.loc[(id_characteristic_table[i], tap_pos[i]), "vkr_lv_percent"] for i in range(n)], dtype=float
-        )
-
-        shift_mv: NDArray = trafo3w_table["shift_mv_degree"].fillna(0.0).values
-        shift_lv: NDArray = trafo3w_table["shift_lv_degree"].fillna(0.0).values
-        if "tap_side" in trafo3w_table.columns:
-            tap_side = trafo3w_table["tap_side"].fillna("hv").values
+        # -- 3. magnetising branch ------------------------------------------------------------
+        if "loss_side" in t3:
+            sides = t3["loss_side"].fillna(loss_side).astype(str).str.lower().to_numpy()
         else:
-            tap_side = np.array(["hv"] * len(trafo3w_table), dtype=object)
+            sides = np.full(n, loss_side)
+        if not np.isin(sides, LOSS_SIDES).all():
+            raise ValueError(f"trafo3w.loss_side must be one of {LOSS_SIDES}")
 
-        theta_hv: NDArray = np.zeros_like(angle_deg, dtype=float)  # hv-Referenz
-        theta_mv: NDArray = shift_mv.astype(float)  # Grad
-        theta_lv: NDArray = shift_lv.astype(float)  # Grad
+        # i0_percent refers to the rating of the loss side (sn_hv for the star node)
+        sn_loss = np.where(sides == "mv", self.sn[:, 1], np.where(sides == "lv", self.sn[:, 2], self.sn[:, 0]))
+        pfe_mw = t3["pfe_kw"].to_numpy(dtype=float) / 1000.0
+        i0_mva = t3["i0_percent"].to_numpy(dtype=float) / 100.0 * sn_loss
+        y_mag = (pfe_mw - 1j * np.sqrt(np.maximum(np.square(i0_mva) - np.square(pfe_mw), 0.0))) / sn_mva
 
-        mag_hv: NDArray = np.ones_like(voltage_ratio, dtype=float)
-        mag_mv: NDArray = np.ones_like(voltage_ratio, dtype=float)
-        mag_lv: NDArray = np.ones_like(voltage_ratio, dtype=float)
+        y_a: NDArray = np.zeros((n, 3), dtype=complex)  # shunt at the terminal end of a branch
+        y_b: NDArray = np.zeros((n, 3), dtype=complex)  # shunt at the star end of a branch
+        y_0 = np.where(sides == "star", y_mag, 0.0)  # shunt at the star node
 
-        theta_hv = np.where(tap_side == "hv", theta_hv + angle_deg, theta_hv)
-        mag_hv = np.where(tap_side == "hv", voltage_ratio, mag_hv)
+        for k, side in enumerate(SIDES):
+            # T-model (z/2 - y_mag - z/2) of the loss-side branch as an equivalent pi (wye -> delta)
+            mask = (sides == side) & (y_mag != 0)
+            if not mask.any():
+                continue
+            half = z[mask, k] / 2.0
+            z_mag = 1.0 / y_mag[mask]
+            z_sum = half * half + 2.0 * half * z_mag
+            z[mask, k] = z_sum / z_mag
+            y_a[mask, k] = half / z_sum
+            y_b[mask, k] = half / z_sum
+        y = 1.0 / z
 
-        theta_mv = np.where(tap_side == "mv", theta_mv + angle_deg, theta_mv)
-        mag_mv = np.where(tap_side == "mv", voltage_ratio, mag_mv)
-
-        theta_lv = np.where(tap_side == "lv", theta_lv + angle_deg, theta_lv)
-        mag_lv = np.where(tap_side == "lv", voltage_ratio, mag_lv)
-
-        # Komplexe Übersetzungsfaktoren je Wicklung
-        a = mag_hv * np.exp(1j * np.deg2rad(theta_hv))  # HV-Zweig
-        b = mag_mv * np.exp(1j * np.deg2rad(theta_mv))  # MV-Zweig
-        c = mag_lv * np.exp(1j * np.deg2rad(theta_lv))  # LV-Zweig
-        abs2_a = a * np.conj(a)
-        abs2_b = b * np.conj(b)
-        abs2_c = c * np.conj(c)
-
-        sn_hv = trafo3w_table["sn_hv_mva"].values
-        sn_mv = trafo3w_table["sn_mv_mva"].values
-        sn_lv = trafo3w_table["sn_lv_mva"].values
-
-        z_hv = vk_hv / 100 * (sn_mva / sn_hv)
-        r_hv = vkr_hv / 100 * (sn_mva / sn_hv)
-        x_hv = np.sqrt(z_hv**2 - r_hv**2)
-        z12 = r_hv + 1j * x_hv  # hv-mv
-
-        z_mv = vk_mv / 100 * (sn_mva / sn_mv)
-        r_mv = vkr_mv / 100 * (sn_mva / sn_mv)
-        x_mv = np.sqrt(z_mv**2 - r_mv**2)
-        z23 = r_mv + 1j * x_mv  # mv-lv
-
-        z_lv = vk_lv / 100 * (sn_mva / sn_lv)
-        r_lv = vkr_lv / 100 * (sn_mva / sn_lv)
-        x_lv = np.sqrt(z_lv**2 - r_lv**2)
-        z13 = r_lv + 1j * x_lv  # hv-lv
-
-        # magnetising admittance
-        i_0 = i0_percent / 100.0 * sn_mva
-        # iron losses are the real part of the admittance
-        g_m = pfe_mw / sn_mva
-
-        # when i_0 is not set / or zero, we can just use zero as a value, since the sqrt would be nan
-        b_m_squared = np.square(i_0) - np.square(pfe_mw)
-        b_m = np.where(b_m_squared < 0, 0, np.sqrt(b_m_squared) / sn_mva)
-        y_ = g_m - 1j * b_m
-
-        z1 = 0.5 * (z12 + z13 - z23)
-        z2 = 0.5 * (z12 + z23 - z13)
-        z3 = 0.5 * (z13 + z23 - z12)
-        zm = 1.0 / y_
-
-        if trafo3w_model == "t":
-            # if np.any(mask_y_): # case transformer with no losses
-            # TODO: no losses check if needed
-
-            K = z1 * z2 * z3 + zm * (z1 * z2 + z2 * z3 + z1 * z3)
-            self._Y_11 = (z2 * z3 + zm * (z2 + z3)) * abs2_a / K
-            self._Y_22 = (z1 * z3 + zm * (z1 + z3)) * abs2_b / K
-            self._Y_33 = (z1 * z2 + zm * (z1 + z2)) * abs2_c / K
-
-            self._Y_12 = -(z3 * zm) * (np.conj(a) * b) / K
-            self._Y_21 = -(z3 * zm) * (np.conj(b) * a) / K
-
-            self._Y_13 = -(z2 * zm) * (np.conj(a) * c) / K
-            self._Y_31 = -(z2 * zm) * (np.conj(c) * a) / K
-
-            self._Y_23 = -(z1 * zm) * (np.conj(b) * c) / K
-            self._Y_32 = -(z1 * zm) * (np.conj(c) * b) / K
-
+        # -- 4. ideal transformers -------------------------------------------------------------
+        shift_mv = t3["shift_mv_degree"].fillna(0.0).to_numpy(dtype=float)
+        shift_lv = t3["shift_lv_degree"].fillna(0.0).to_numpy(dtype=float)
+        shift = np.deg2rad(np.stack([np.zeros(n), shift_mv, shift_lv], axis=1))
+        t = self.vn_rated / self.vn_bus * np.exp(-1j * shift)
+        s: NDArray = np.ones((n, 3), dtype=complex)
+        ratio = np.nan_to_num(_row("voltage_ratio"), nan=1.0) * np.exp(
+            1j * np.deg2rad(np.nan_to_num(_row("angle_deg")))
+        )
+        tap_side = t3["tap_side"].to_numpy(dtype=object) if "tap_side" in t3 else np.full(n, None)
+        if "tap_at_star_point" in t3:
+            at_star = t3["tap_at_star_point"].fillna(False).to_numpy(dtype=bool)
         else:
-            raise UserWarning(f"Trafo Model: {trafo3w_model}, not supported. Only pi and t are available.")
+            at_star = np.zeros(n, dtype=bool)
+        for k, side in enumerate(SIDES):
+            on_side = tap_side == side
+            t[:, k] = np.where(on_side & ~at_star, t[:, k] * ratio, t[:, k])
+            s[:, k] = np.where(on_side & at_star, ratio, s[:, k])
 
-        # for DC powerflow
-        X1 = np.imag(z1)
-        X2 = np.imag(z2)
-        X3 = np.imag(z3)
+        # -- 5. star node eliminated, referred to the buses ---------------------------------------
+        u = y * s
+        w = y * np.conj(s)
+        star_sum = y_0 + np.sum(np.square(np.abs(s)) * (y + y_b), axis=1)
+        eye = np.eye(3)
+        y_int = np.einsum("ei,ij->eij", y + y_a, eye) - np.einsum("ei,ej->eij", u, w) / star_sum[:, None, None]
+        y_bus = y_int / (np.conj(t)[:, :, None] * t[:, None, :])
+        for i in range(3):
+            for j in range(3):
+                setattr(self, f"_Y_{i + 1}{j + 1}", y_bus[:, i, j])
 
-        z1_dc = 1j * X1
-        z2_dc = 1j * X2
-        z3_dc = 1j * X3
+        # kept for the star voltage in the results
+        self._t, self._w, self._star_sum = t, w, star_sum
 
-        K_dc = z1_dc * z2_dc + z1_dc * z3_dc + z2_dc * z3_dc
+        # -- DC: pandapower's makeBdc on the three equivalent 2W branches, star eliminated -------
+        # Each branch k carries b_k = 1 / (x_k,bus * |tap_k|) and the phase shift delta_k
+        # (terminal -> star). With pandapower's 2W tap placement and its auxiliary star bus (per
+        # unit of the hv BUS voltage) that is b_k = |s_k| / (x_k * |t_k| * c), c = vn_hv,rated /
+        # vn_hv,bus: a tap at the star point sits on the other side of pandapower's 2W branch, so
+        # it enters the DC susceptance with |N| instead of 1/|N|.
+        x = np.imag(1.0 / y)
+        c = self.vn_rated[:, [0]] / self.vn_bus[:, [0]]
+        b = np.abs(s) / (x * np.abs(t) * c)
+        delta = np.angle(t) + np.angle(s)
+        b_sum = b.sum(axis=1)
+        b_red = np.einsum("ei,ij->eij", b, eye) - np.einsum("ei,ej->eij", b, b) / b_sum[:, None, None]
+        for i in range(3):
+            for j in range(3):
+                setattr(self, f"_DC_Y_{i + 1}{j + 1}", 1j * b_red[:, i, j])
 
-        Y_hh_dc0 = (z2_dc + z3_dc) / K_dc
-        Y_mm_dc0 = (z1_dc + z3_dc) / K_dc
-        Y_ll_dc0 = (z1_dc + z2_dc) / K_dc
+        self.in_service = self._apply_in_service(t3)
 
-        Y_hm_dc0 = -z3_dc / K_dc
-        Y_mh_dc0 = -z3_dc / K_dc
+        # DC phase-shift injection (TwoWindingTransformerModel convention: RHS = Sbus.real + p_shift)
+        p_shift_inj = b * delta - b * (np.sum(b * delta, axis=1) / b_sum)[:, None]
+        # Iron losses at the star node (loss_side "star") are a DC load at pandapower's auxiliary
+        # bus (a shunt conductance counts as load at 1 pu there); eliminating the star node
+        # spreads it over the terminals in proportion to b_k.
+        p_star = -np.real(y_0) / c[:, 0] ** 2
+        p_shift_inj += b / b_sum[:, None] * p_star[:, None]
+        p_shift_inj[~self.in_service] = 0.0
+        self.p_shift = np.zeros(len(bus_table))
+        for k, buses in enumerate(self._buses()):
+            np.add.at(self.p_shift, buses, p_shift_inj[:, k])
 
-        Y_hl_dc0 = -z2_dc / K_dc
-        Y_lh_dc0 = -z2_dc / K_dc
+    def results(self, voltage: NDArray, sn_mva: float) -> dict[str, NDArray]:
+        """res_trafo3w columns for the solved bus voltages, as pandapower defines them."""
+        current = self.port_currents(voltage)  # (n, 3), into the transformer
+        buses = np.stack(self._buses(), axis=1)
+        v_bus = voltage[buses]
+        vm = np.abs(v_bus)
+        s_mva = v_bus * np.conj(current) * sn_mva
+        i_ka = np.abs(s_mva) / (np.sqrt(3) * vm * self.vn_bus)
 
-        Y_ml_dc0 = -z1_dc / K_dc
-        Y_lm_dc0 = -z1_dc / K_dc
+        # star voltage, per unit of the hv bus voltage (pandapower's auxiliary bus)
+        v_star = np.sum(self._w * v_bus / self._t, axis=1) / self._star_sum * (self.vn_rated[:, 0] / self.vn_bus[:, 0])
 
-        a_dc = np.abs(a)
-        b_dc = np.abs(b)
-        c_dc = np.abs(c)
-
-        self._DC_Y_hh = Y_hh_dc0 / (a_dc**2)
-        self._DC_Y_mm = Y_mm_dc0 / (b_dc**2)
-        self._DC_Y_ll = Y_ll_dc0 / (c_dc**2)
-
-        self._DC_Y_hm = Y_hm_dc0 / (a_dc * b_dc)
-        self._DC_Y_mh = Y_mh_dc0 / (a_dc * b_dc)
-
-        self._DC_Y_hl = Y_hl_dc0 / (a_dc * c_dc)
-        self._DC_Y_lh = Y_lh_dc0 / (a_dc * c_dc)
-
-        self._DC_Y_ml = Y_ml_dc0 / (b_dc * c_dc)
-        self._DC_Y_lm = Y_lm_dc0 / (b_dc * c_dc)
+        res = {}
+        for k, side in enumerate(SIDES):
+            res[f"p_{side}_mw"] = s_mva[:, k].real
+            res[f"q_{side}_mvar"] = s_mva[:, k].imag
+        res["pl_mw"] = s_mva.real.sum(axis=1)
+        res["ql_mvar"] = s_mva.imag.sum(axis=1)
+        for k, side in enumerate(SIDES):
+            res[f"i_{side}_ka"] = i_ka[:, k]
+        for k, side in enumerate(SIDES):
+            res[f"vm_{side}_pu"] = vm[:, k]
+            res[f"va_{side}_degree"] = np.angle(v_bus[:, k], deg=True)
+        res["va_internal_degree"] = np.where(self.in_service, np.angle(v_star, deg=True), np.nan)
+        res["vm_internal_pu"] = np.where(self.in_service, np.abs(v_star), np.nan)
+        loading = np.max(i_ka * self.vn_rated * np.sqrt(3) / self.sn * 100.0, axis=1)  # trafo_loading="current"
+        res["loading_percent"] = np.where(self.in_service, loading, 0.0)
+        return res
