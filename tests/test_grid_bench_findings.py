@@ -264,8 +264,8 @@ def test_open_line_switch_disconnects_line():
 # --- 5. trafo rated voltage != bus nominal voltage ------------------------------------------
 
 
-def _net_trafo(vn_hv_kv: float, vn_lv_kv: float) -> pandapowerNet:
-    net = create_empty_network(sn_mva=1.0)
+def _net_trafo(vn_hv_kv: float, vn_lv_kv: float, net_sn_mva: float = 1.0, **tap) -> pandapowerNet:
+    net = create_empty_network(sn_mva=net_sn_mva)
     hv = create_bus(net, vn_kv=110.0)
     lv = create_bus(net, vn_kv=20.0)
     lv2 = create_bus(net, vn_kv=20.0)
@@ -281,6 +281,7 @@ def _net_trafo(vn_hv_kv: float, vn_lv_kv: float) -> pandapowerNet:
         vkr_percent=0.4,
         pfe_kw=20.0,
         i0_percent=0.05,
+        **tap,
     )
     create_line_from_parameters(
         net, lv, lv2, length_km=2.0, r_ohm_per_km=0.16, x_ohm_per_km=0.11, c_nf_per_km=250.0, max_i_ka=0.4
@@ -306,6 +307,27 @@ def test_trafo_rated_voltage_differs_from_bus(vn_hv_kv, vn_lv_kv):
     npf = NewtonPowerflow(net)
     np.testing.assert_allclose(npf._YBus.toarray(), ref._ppc["internal"]["Ybus"].toarray(), atol=1e-8)
     _assert_matches_pandapower(_net_trafo(vn_hv_kv, vn_lv_kv))
+
+
+RATIO_TAP = dict(tap_changer_type="Ratio", tap_neutral=0, tap_min=-5, tap_max=5, tap_step_percent=1.25)
+
+
+@pytest.mark.parametrize(
+    "tap",
+    [{}, dict(tap_side="hv", tap_pos=3, **RATIO_TAP), dict(tap_side="lv", tap_pos=-2, **RATIO_TAP)],
+    ids=["no_tap", "hv_tap", "lv_tap"],
+)
+@pytest.mark.parametrize("net_sn_mva", [1.0, 100.0])
+def test_trafo_rated_voltage_with_tap_and_base_power(net_sn_mva, tap):
+    """The rated-voltage ratio must combine with a tap on either side, and every per-unit
+    quantity (incl. the iron losses pfe_kw) must follow net.sn_mva."""
+    net = _net_trafo(115.0, 21.0, net_sn_mva, **tap)
+    ref = copy.deepcopy(net)
+    runpp(ref)
+    calculate_trafo_characteristic(net, inplace=True)
+    npf = NewtonPowerflow(net)
+    np.testing.assert_allclose(npf._YBus.toarray(), ref._ppc["internal"]["Ybus"].toarray(), rtol=1e-10, atol=1e-10)
+    _assert_matches_pandapower(_net_trafo(115.0, 21.0, net_sn_mva, **tap))
 
 
 # --- 6. calculateTrafoTapTable -----------------------------------------------------------
