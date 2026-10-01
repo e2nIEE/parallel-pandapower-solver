@@ -487,3 +487,62 @@ def test_existing_tabular_characteristic_is_kept():
     expected = _reference(net)
     assert not np.isclose(np.angle(expected[1], deg=True), 0.0, atol=0.5)  # the shifter does act
     _assert_matches_pandapower(net)
+
+
+def test_existing_characteristic_rows_and_ids_are_untouched():
+    net = _net_tabular_phase_shifter()
+    user_rows = net.trafo_characteristic_table.set_index(["id_characteristic", "step"])
+    calculate_trafo_characteristic(net, inplace=True)
+    table = net.trafo_characteristic_table
+    assert table.index.names == ["id_characteristic", "step"]
+    assert net.trafo.id_characteristic_table[1] == 0
+    pd.testing.assert_frame_equal(table.loc[[0], user_rows.columns], user_rows, check_dtype=False)
+
+
+def test_calculate_trafo_characteristic_twice():
+    """A second call (e.g. after changing a tap) replaces the generated rows instead of adding more."""
+    net = _net_two_trafos("Ratio", tap_side="hv", tap_neutral=0, tap_min=-5, tap_max=5, tap_pos=1, tap_step_percent=1.5)
+    calculate_trafo_characteristic(net, inplace=True)
+    n_rows = len(net.trafo_characteristic_table)
+    net.trafo.loc[1, "tap_pos"] = 4
+    calculate_trafo_characteristic(net, inplace=True)
+    assert len(net.trafo_characteristic_table) == n_rows
+    _assert_matches_pandapower(net)
+
+
+TAP = dict(tap_neutral=0, tap_min=-10, tap_max=10)
+
+
+@pytest.mark.parametrize(
+    "tap_changer_type, tap",
+    [
+        ("Ratio", dict(tap_side="hv", tap_pos=3, tap_step_percent=1.5, **TAP)),
+        ("Ratio", dict(tap_side="lv", tap_pos=-2, tap_step_percent=1.5, **TAP)),
+        ("Ratio", dict(tap_side="hv", tap_pos=3, tap_step_percent=1.5, tap_step_degree=30.0, **TAP)),
+        ("Ratio", dict(tap_side="lv", tap_pos=3, tap_step_percent=1.5, tap_step_degree=30.0, **TAP)),
+        ("Symmetrical", dict(tap_side="lv", tap_pos=2, tap_step_percent=2.0, tap_step_degree=60.0, **TAP)),
+        ("Ideal", dict(tap_side="hv", tap_pos=3, tap_step_degree=2.5, **TAP)),
+        ("Ideal", dict(tap_side="lv", tap_pos=3, tap_step_degree=2.5, **TAP)),
+        ("Ideal", dict(tap_side="hv", tap_pos=-4, tap_step_percent=1.5, **TAP)),
+    ],
+    ids=[
+        "ratio_hv",
+        "ratio_lv",
+        "ratio_hv_angle",
+        "ratio_lv_angle",
+        "symmetrical_lv_angle",
+        "ideal_hv",
+        "ideal_lv",
+        "ideal_percent",
+    ],
+)
+def test_tap_changer_types_match_pandapower(tap_changer_type, tap):
+    """Every tap changer type converted to the characteristic table, on either side, as pandapower
+    computes it (lv-side angles count negative)."""
+    net = _net_two_trafos(tap_changer_type, **tap)
+    ref = copy.deepcopy(net)
+    runpp(ref)
+    calculate_trafo_characteristic(net, inplace=True)
+    npf = NewtonPowerflow(net)
+    np.testing.assert_allclose(npf._YBus.toarray(), ref._ppc["internal"]["Ybus"].toarray(), rtol=1e-10, atol=1e-10)
+    _assert_matches_pandapower(_net_two_trafos(tap_changer_type, **tap))

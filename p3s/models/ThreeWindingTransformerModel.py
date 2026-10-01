@@ -67,7 +67,6 @@ class ThreeWindingTransformerModel(ThreePort):
 
         shift_mv: NDArray = trafo3w_table["shift_mv_degree"].fillna(0.0).values
         shift_lv: NDArray = trafo3w_table["shift_lv_degree"].fillna(0.0).values
-        print(angle_deg.shape)
         if "tap_side" in trafo3w_table.columns:
             tap_side = trafo3w_table["tap_side"].fillna("hv").values
         else:

@@ -61,6 +61,10 @@ class TwoWindingTransformerModel(TwoPort):
         # tap changer
         angle_deg = tap_table["angle_deg"].to_numpy()[tap_row]
         voltage_ratio = tap_table["voltage_ratio"].to_numpy()[tap_row]
+        # angle_deg is the tapped winding's own shift; as in pandapower it counts negative for an
+        # lv-side tap (an angle in b acts like the same angle on the hv side in the stamp below).
+        if "tap_side" in trafo_table.columns:
+            angle_deg = np.where(trafo_table["tap_side"].values == "lv", -angle_deg, angle_deg)
         shift_degree = trafo_table["shift_degree"].values
         theta = np.deg2rad(angle_deg + shift_degree)
 
