@@ -26,13 +26,20 @@ class TwoWindingTransformerModel(TwoPort):
         self.voltages_from = bus_table.loc[self._from_bus, "vn_kv"]
         self.voltages_to = bus_table.loc[self._to_bus, "vn_kv"]
 
-        # TODO: calc ratio based on voltage levels
-        # hv_kv = bus_table.loc[self._from_bus, 'vn_kv'].values
-        # lv_kv = bus_table.loc[self._to_bus, 'vn_kv'].values
-        # lv_voltage = trafo_table["vn_lv_kv"].values
-        # hv_voltage = trafo_table["vn_hv_kv"].values
-        # a_ratio = hv_voltage / lv_voltage
-        # v_base  = lv_voltage ** 2
+        # Rated voltages vs bus nominal voltages. The trafo data (vk, vkr, pfe, i0) is referred
+        # to the trafo's own rated voltages vn_hv_kv / vn_lv_kv, the Ybus to the buses' vn_kv.
+        # Where they differ (CGMES imports, real grids -- from_mpc always sets them equal) the
+        # trafo gets an extra off-nominal ratio on the hv side, and its impedances move from the
+        # rated lv voltage to the lv bus voltage as base (pandapower build_branch:
+        # _calc_nominal_ratio_from_dataframe, _calc_r_x_from_dataframe, _calc_y_from_dataframe):
+        #     n0 = (vn_hv_kv / vn_kv_hv_bus) / (vn_lv_kv / vn_kv_lv_bus)
+        #     k  = (vn_lv_kv / vn_kv_lv_bus) ** 2      series z * k, magnetising y / k
+        # Both are 1 for matching voltages. Only the ratio matters, so a trafo whose "hv" rating is
+        # below its "lv" rating (as in some converted MATPOWER cases) needs no special case.
+        vn_ratio_hv = trafo_table["vn_hv_kv"].to_numpy(dtype=float) / self.voltages_from.to_numpy(dtype=float)
+        vn_ratio_lv = trafo_table["vn_lv_kv"].to_numpy(dtype=float) / self.voltages_to.to_numpy(dtype=float)
+        n0 = vn_ratio_hv / vn_ratio_lv
+        k = vn_ratio_lv**2
 
         # Input Values
         tap_pos = trafo_table["tap_pos"].fillna(0.0).astype(int).values
@@ -54,6 +61,10 @@ class TwoWindingTransformerModel(TwoPort):
         # tap changer
         angle_deg = tap_table["angle_deg"].to_numpy()[tap_row]
         voltage_ratio = tap_table["voltage_ratio"].to_numpy()[tap_row]
+        # angle_deg is the tapped winding's own shift; as in pandapower it counts negative for an
+        # lv-side tap (an angle in b acts like the same angle on the hv side in the stamp below).
+        if "tap_side" in trafo_table.columns:
+            angle_deg = np.where(trafo_table["tap_side"].values == "lv", -angle_deg, angle_deg)
         shift_degree = trafo_table["shift_degree"].values
         theta = np.deg2rad(angle_deg + shift_degree)
 
@@ -79,10 +90,13 @@ class TwoWindingTransformerModel(TwoPort):
             a = np.where(tap_side2 == "hv", N, a)
             b = np.where(tap_side2 == "lv", N, b)
 
-        # impedance values
+        # rated-voltage ratio: an ideal transformer in series with the tap on the hv side
+        a = a * n0
+
+        # impedance values, referred to the lv bus voltage (k)
         sn_mva_scaled = sn_mva / trafo_sn_mva
-        z_sc = vk_percent / 100.0 * sn_mva_scaled
-        r_sc = vkr_percent / 100.0 * sn_mva_scaled
+        z_sc = vk_percent / 100.0 * sn_mva_scaled * k
+        r_sc = vkr_percent / 100.0 * sn_mva_scaled * k
 
         # Preserve the sign of the short-circuit impedance: vk_percent (hence z_sc) can be
         # NEGATIVE for some equivalent transformers (e.g. RTE/Polish grids), which encodes a
@@ -100,7 +114,9 @@ class TwoWindingTransformerModel(TwoPort):
         # when i_0 is not set / or zero, we can just use zero as a value, since the sqrt would be nan
         b_m_squared = np.square(i_0) - np.square(pfe_mw)
         b_m = np.where(b_m_squared < 0, 0, np.sqrt(b_m_squared) / sn_mva)
-        y_ = g_m * sn_mva - 1j * b_m  # / sn_mva_scaled # * z_ref / z_n
+        # both parts in per unit of net.sn_mva (the former g_m * sn_mva left the iron losses in
+        # MW, correct only for sn_mva == 1), referred to the lv bus voltage (/ k)
+        y_ = (g_m - 1j * b_m) / k
 
         if trafo_model == "pi":
             # optimised formula, z1 = y_, z2 = z_, z3 = y_
