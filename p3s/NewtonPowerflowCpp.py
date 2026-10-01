@@ -16,6 +16,7 @@ from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
 from p3s.models.TransmissionLineModel import TransmissionLineModel
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.models.WardModel import WardModel
+from p3s.models.ImpedanceModel import ImpedanceModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage, mean_setpoint_vm
@@ -120,6 +121,19 @@ class NewtonPowerflow:
             Ybus_dat.extend(Ybus_shunts.data)
             Ybus_row.extend(Ybus_shunts.row)
             Ybus_col.extend(Ybus_shunts.col)
+
+        if "impedance" in net and len(net.impedance) > 0:
+            impedances = ImpedanceModel(net.impedance, net.bus, sn_mva=net.sn_mva)
+            self._ybus_elements["impedance"] = impedances
+            Ybus_impedances = impedances.create_y_matrix(n_bus=n_bus)
+            Ybus_dat.extend(Ybus_impedances.data)
+            Ybus_row.extend(Ybus_impedances.row)
+            Ybus_col.extend(Ybus_impedances.col)
+
+            Bbus_impedances = impedances.create_y_dc_matrix(n_bus=n_bus)
+            Bbus_dat.extend(Bbus_impedances.data)
+            Bbus_row.extend(Bbus_impedances.row)
+            Bbus_col.extend(Bbus_impedances.col)
 
         Ybus = coo_matrix((Ybus_dat, (Ybus_row, Ybus_col)), shape=(n_bus, n_bus)).tocsr()
         Bbus = coo_matrix((Bbus_dat, (Bbus_row, Bbus_col)), shape=(n_bus, n_bus)).tocsr().imag
