@@ -170,6 +170,65 @@ def test_slack_gen_is_reference_bus():
     assert b[0] not in npf.busses["pv"]
 
 
+# --- 2./3. gen and ext_grid results ---------------------------------------------------------
+
+
+def _net_results_oos_gen() -> pandapowerNet:
+    net, b = _net_feeder()
+    create_ext_grid(net, b[0])
+    create_gen(net, b[2], p_mw=5.0, vm_pu=1.02)
+    create_gen(net, b[3], p_mw=3.0, vm_pu=1.05, in_service=False)  # res_gen row must be all 0
+    return net
+
+
+def _net_results_slack_gen() -> pandapowerNet:
+    net, b = _net_feeder()
+    create_gen(net, b[0], p_mw=2.0, vm_pu=1.02, slack=True)  # P is a result, not the 2 MW set point
+    create_gen(net, b[3], p_mw=8.0, vm_pu=1.0)
+    return net
+
+
+def _net_results_shared_bus() -> pandapowerNet:
+    """Two gens on one bus share its Q in proportion to their reactive range (pfsoln._update_q)."""
+    net, b = _net_feeder()
+    create_ext_grid(net, b[0])
+    create_gen(net, b[2], p_mw=4.0, vm_pu=1.03, min_q_mvar=-10.0, max_q_mvar=30.0)
+    create_gen(net, b[2], p_mw=2.0, vm_pu=1.03, min_q_mvar=-5.0, max_q_mvar=5.0)
+    return net
+
+
+def _results_cpp(net: pandapowerNet):
+    npf, v = _solve_p3s(net)
+    npf._parse_results(net, v)  # the C++ calculate() only returns the voltages
+
+
+def _results_python(net: pandapowerNet):
+    from p3s.NewtonPowerflow import NewtonPowerflow as NewtonPowerflowPy
+
+    calculate_trafo_characteristic(net, inplace=True)
+    NewtonPowerflowPy(net).calculate(net, init="flat", tolerance=1e-8, max_iterations=30)
+
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+@pytest.mark.parametrize(
+    "make_net",
+    [_net_results_oos_gen, _net_results_slack_gen, _net_results_shared_bus],
+    ids=["oos_gen", "slack_gen", "shared_bus"],
+)
+def test_gen_and_ext_grid_results(make_net, solve):
+    net = make_net()
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8)
+    solve(net)
+    cols = ["p_mw", "q_mvar", "vm_pu", "va_degree"]
+    np.testing.assert_allclose(net.res_gen[cols].to_numpy(float), ref.res_gen[cols].to_numpy(float), atol=1e-5)
+    if len(net.ext_grid):
+        cols = ["p_mw", "q_mvar"]
+        np.testing.assert_allclose(
+            net.res_ext_grid[cols].to_numpy(float), ref.res_ext_grid[cols].to_numpy(float), atol=1e-5
+        )
+
+
 # --- 4. switches / unsupplied buses ---------------------------------------------------------
 
 

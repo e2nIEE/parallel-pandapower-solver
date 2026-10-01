@@ -11,15 +11,16 @@ from scipy.sparse import coo_matrix
 from scipy.sparse import coo_matrix as sparse
 from scipy.sparse.linalg import spsolve
 
+from p3s.models.ImpedanceModel import ImpedanceModel
 from p3s.models.ShuntModel import ShuntModel
 from p3s.models.ThreeWindingTransformerModel import ThreeWindingTransformerModel
 from p3s.models.TransmissionLineModel import TransmissionLineModel
 from p3s.models.TwoWindingTransformerModel import TwoWindingTransformerModel
 from p3s.models.WardModel import WardModel
-from p3s.models.ImpedanceModel import ImpedanceModel
 from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage, mean_setpoint_vm
+from p3s.voltage_sources import bus_types, voltage_sources, write_unit_results
 
 # Fast C++ Newton-Raphson solver (polar formulation, KLU linear solve). Installed into
 # the p3s package by `pip install parallel-pandapower-solver[cpp]` (CMake / scikit-build-core; see
@@ -43,6 +44,8 @@ class NewtonPowerflow:
         # keeping a reference on all classes which create the ybus.
         self._ybus_elements = {}
         self.busses: dict[str, NDArray] = None
+        # in-service ext_grids + gens as one table (p3s.voltage_sources)
+        self._units: pd.DataFrame = None
         # Cached C++ solver (KLU symbolic analyze is done once per topology and
         # reused across calculate() calls -> only the cheap numeric refactor runs
         # on subsequent solves). Invalidated when the Ybus structure changes.
@@ -154,11 +157,6 @@ class NewtonPowerflow:
         # create an initial voltage vector, for flat start (1pu, 0°) and overwrite it with setpoints of gen's
         self._initial_voltage = np.ones(shape=len(net.bus), dtype=np.complex128)
 
-        # all buses are pq buses by default
-        pq = self._lookup.values
-        pv = np.ndarray(shape=0, dtype=int)
-        ref = np.ndarray(shape=0, dtype=int)
-
         if "load" in net and len(net["load"]) > 0:
             net.load["_lookup"] = self._lookup[net.load.bus].values.astype(int)
             res_mw = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
@@ -174,29 +172,15 @@ class NewtonPowerflow:
             sBus = sBus.add(_sgen, fill_value=0)
 
         if "gen" in net and len(net["gen"]) > 0:
+            # used by timeseries.build_sbus_matrix
             net.gen["_lookup"] = self._lookup[net.gen.bus].values.astype(int)
 
-            res_mw = net.gen.p_mw * net.gen.scaling * net.gen.in_service
-            _gen = -1.0 * res_mw.groupby(net.gen["_lookup"]).sum()
-            sBus = sBus.add(_gen, fill_value=0)
-
-            # one PV bus per distinct gen bus (multiple gens can share a bus)
-            vm_by_bus = net.gen.groupby("_lookup").vm_pu.first()  # or .mean() / .max()
-            pv = vm_by_bus.index.values
-            self._initial_voltage[pv] = vm_by_bus.values
-
-            # If a bus has a generator, it will be changed to a pv bus.
-            pq = np.setdiff1d(pq, pv)
-
-        if "ext_grid" in net and len(net["ext_grid"]) > 0:
-            net.ext_grid["_lookup"] = self._lookup[net.ext_grid.bus].values.astype(int)
-            ref = net.ext_grid["_lookup"].values
-
-            # remove pv busses from pq, since pv busses are handled differently
-            pq = np.setdiff1d(pq, ref)
-
-            # and add the vm and va set point to the initial voltage vector
-            self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
+        # ext_grids and gens as one table of in-service voltage-controlling units (see
+        # p3s.voltage_sources): an ext_grid is a slack unit without scheduled P, a gen with
+        # slack=True is a slack unit too. They define the bus types and start voltages.
+        self._units = voltage_sources(net, self._lookup)
+        sBus = sBus.add(-1.0 * self._units.groupby("bus").p_mw.sum(), fill_value=0)
+        ref, pv, pq = bus_types(self._units, len(net.bus), self._initial_voltage)
 
         # Seed the remaining PQ buss at the mean generator / ext_grid set point rather than a flat 1.0 pu.
         # This is what pandapower's init = "auto" does, and it saves Newton iterations.
@@ -366,32 +350,10 @@ class NewtonPowerflow:
             res_ward["p_mw"].to_numpy(copy=False)[:] = wards._ps_mw + vm_ward**2 * wards._pz_mw
             res_ward["q_mvar"].to_numpy(copy=False)[:] = wards._qs_mvar + vm_ward**2 * wards._qz_mvar
 
-        # -- calculate gen results --
-        if "gen" in self._ybus_elements and "gen" in net and len(net.gen):
-            net.res_gen = _ensure_index(net.res_gen, net.gen.index)
-            gen_bus = net.res_bus.loc[self.pf_objects["PVPQ"]._pv]
-            gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
-            res_gen = net.res_gen
-
-            # vm/va are per-bus quantities -> broadcast to every gen on that bus
-            res_gen["vm_pu"].to_numpy(copy=False)[:] = gen_bus.vm_pu.to_numpy(copy=False)
-            res_gen["va_degree"].to_numpy(copy=False)[:] = gen_bus.va_degree.to_numpy(copy=False)
-
-            # direct copy
-            res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
-
-            # total Q injected at each PV bus (per-bus), then split across gens on that bus
-            q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
-            # equal split: divide each bus's Q by the number of gens on it
-            gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))
-            res_gen["q_mvar"].to_numpy(copy=False)[:] = q_bus[gen_lookup] / gens_per_bus[gen_lookup]
-
-        # -- calculate ext_grid results --
-        net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
-        ext_grid_power = (sBus - self._sBus * net.sn_mva)[net.ext_grid.bus]
-        res_ext = net.res_ext_grid
-        res_ext["p_mw"].to_numpy(copy=False)[:] = ext_grid_power.real
-        res_ext["q_mvar"].to_numpy(copy=False)[:] = ext_grid_power.imag
+        # -- calculate gen / ext_grid results --
+        # The residual (computed minus scheduled injection) is what the voltage-controlling
+        # units supplied on top of their schedule; p3s.voltage_sources shares it out.
+        write_unit_results(net, self._units, sBus - self._sBus * net.sn_mva, vm, va)
 
     def _pre_dc_solve(self, yBus: sparse, voltage: NDArray, Pinj: NDArray, ref, pvpq):
         # "DC" Lastfluss zur initialisierung

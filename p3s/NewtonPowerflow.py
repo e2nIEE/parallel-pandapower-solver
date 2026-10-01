@@ -23,6 +23,7 @@ from p3s.PowerflowObject import PowerflowObject
 from p3s.PQPVPowerflow import PQPVPowerflow
 from p3s.q_capability import resolve_q_limits
 from p3s.timeseries import mean_setpoint_vm
+from p3s.voltage_sources import bus_types, voltage_sources, write_unit_results
 
 
 class NewtonPowerflow:
@@ -38,6 +39,8 @@ class NewtonPowerflow:
         # keeping a reference on all classes which create the ybus.
         self._ybus_elements: dict[str, TwoPort | ThreePort] = {}
         self.busses: dict = {}
+        # in-service ext_grids + gens as one table (p3s.voltage_sources)
+        self._units: pd.DataFrame | None = None
         self.enforce_q_lims: bool = enforce_q_lims
         self._setup_pf(net)
 
@@ -142,11 +145,6 @@ class NewtonPowerflow:
         # create an initial voltage vector, for flat start (1pu, 0°) and overwrite it with setpoints of gen's
         self._initial_voltage = np.ones(shape=len(net.bus), dtype=np.complex128)
 
-        # all buses are pq buses by default
-        pq = self._lookup.values
-        pv = np.ndarray(shape=0, dtype=int)
-        ref = np.ndarray(shape=0, dtype=int)
-
         if "load" in net and len(net["load"]) > 0:
             net.load["_lookup"] = self._lookup[net.load.bus].values.astype(int)
             res_mw = (net.load.p_mw + net.load.q_mvar * 1j) * net.load.scaling * net.load.in_service
@@ -180,28 +178,15 @@ class NewtonPowerflow:
             sBus = sBus.add(_sgen, fill_value=0)
 
         if "gen" in net and len(net["gen"]) > 0:
+            # used by timeseries.build_sbus_matrix
             net.gen["_lookup"] = self._lookup[net.gen.bus].values.astype(int)
-            res_mw = net.gen.p_mw * net.gen.scaling * net.gen.in_service
-            _gen = -1.0 * res_mw.groupby(net.gen["_lookup"]).sum()
-            sBus = sBus.add(_gen, fill_value=0)
 
-            # one PV bus per distinct gen bus (multiple gens can share a bus)
-            vm_by_bus = net.gen.groupby("_lookup").vm_pu.first()  # or .mean() / .max()
-            pv = vm_by_bus.index.values
-            self._initial_voltage[pv] = vm_by_bus.values
-
-            # If a bus has a generator, it will be changed to a pv bus.
-            pq = np.setdiff1d(pq, pv)
-
-        if "ext_grid" in net and len(net["ext_grid"]) > 0:
-            net.ext_grid["_lookup"] = self._lookup[net.ext_grid.bus].values.astype(int)
-            ref = net.ext_grid["_lookup"].values
-
-            # remove pv busses from pq, since pv busses are handled differently
-            pq = np.setdiff1d(pq, ref)
-
-            # and add the vm and va set point to the initial voltage vector
-            self._initial_voltage[ref] = net.ext_grid.vm_pu * np.exp(np.deg2rad(net.ext_grid.va_degree) * 1j)
+        # ext_grids and gens as one table of in-service voltage-controlling units (see
+        # p3s.voltage_sources): an ext_grid is a slack unit without scheduled P, a gen with
+        # slack=True is a slack unit too. They define the bus types and start voltages.
+        self._units = voltage_sources(net, self._lookup)
+        sBus = sBus.add(-1.0 * self._units.groupby("bus").p_mw.sum(), fill_value=0)
+        ref, pv, pq = bus_types(self._units, len(net.bus), self._initial_voltage)
 
         # Seed the remaining PQ buss at the mean generator / ext_grid set point rather than a flat 1.0 pu.
         # This is what pandapower's init = "auto" does, and it saves Newton iterations.
@@ -345,61 +330,6 @@ class NewtonPowerflow:
             res_ward["p_mw"].to_numpy(copy=False)[:] = wards._ps_mw + vm_ward**2 * wards._pz_mw
             res_ward["q_mvar"].to_numpy(copy=False)[:] = wards._qs_mvar + vm_ward**2 * wards._qz_mvar
 
-        # -- calculate gen results --
-        # Only nets with generators do the gen-result maths: "_lookup" is added to net.gen
-        # by _setup_pf solely when len(net.gen) > 0, so on a PQ-only net (SAM's usual case)
-        # net.gen exists but has no "_lookup" column. Guard the whole block (the ext_grid
-        # results below must still run).
-        if "gen" in self._ybus_elements and "gen" in net and len(net.gen):
-            net.res_gen = _ensure_index(net.res_gen, net.gen.index)
-            gen_lookup = net.gen["_lookup"].to_numpy().astype(int)
-            res_gen = net.res_gen
-
-            # vm/va are per-bus quantities -> broadcast to every gen on that bus. Index the
-            # per-bus results by each gen's bus (gen_lookup) rather than by the distinct
-            # PV-bus list (_pv): when several gens share a bus, res_gen has one row per gen
-            # while _pv has one entry per bus, so a per-bus assignment would shape-mismatch.
-            bus_vm = net.res_bus["vm_pu"].to_numpy(copy=False)
-            bus_va = net.res_bus["va_degree"].to_numpy(copy=False)
-            res_gen["vm_pu"].to_numpy(copy=False)[:] = bus_vm[gen_lookup]
-            res_gen["va_degree"].to_numpy(copy=False)[:] = bus_va[gen_lookup]
-
-            # direct copy
-            res_gen["p_mw"].to_numpy(copy=False)[:] = net.gen.p_mw
-
-            # Total Q injected at each bus (per-bus), then distributed across the gens on
-            # that bus. q_bus[b] is the whole bus reactive injection; q_bus[gen_lookup]
-            # broadcasts that bus total onto every gen at the bus (== Qg_tot in pfsoln).
-            q_bus = -1 * net.res_bus["q_mvar"].to_numpy() - self._sBus.imag * net.sn_mva  # per-bus (n_bus,)
-            q_tot = q_bus[gen_lookup]  # per-gen: total Q of that gen's bus
-
-            # Distribute the bus Q across its gens in proportion to each gen's reactive
-            # range, matching pandapower/PYPOWER pfsoln._update_q:
-            #   Qg[i] = Qmin[i] + (Qg_tot - Qmin_tot)/(Qmax_tot - Qmin_tot + EPS)*(Qmax-Qmin)
-            # where *_tot are the per-bus sums over the bus's gens. A bare equal split
-            # (Qtot/n) is wrong whenever the gens have unequal Q ranges (e.g.
-            # GBreducednetwork). For buses with zero total range the proportional term
-            # collapses to ~0, so fall back to the equal split there (matches PYPOWER).
-            q_min = net.gen.get("min_q_mvar")
-            q_max = net.gen.get("max_q_mvar")
-            if q_min is not None and q_max is not None:
-                q_min = q_min.to_numpy(dtype=float)
-                q_max = q_max.to_numpy(dtype=float)
-                qmin_tot = np.bincount(gen_lookup, weights=q_min, minlength=len(net.bus))[gen_lookup]
-                qmax_tot = np.bincount(gen_lookup, weights=q_max, minlength=len(net.bus))[gen_lookup]
-                eps = np.finfo(float).eps
-                q_gen = q_min + (q_tot - qmin_tot) / (qmax_tot - qmin_tot + eps) * (q_max - q_min)
-                # zero-range buses: fall back to an equal split (proportional term ~0 there)
-                zero_range = np.isclose(qmax_tot, qmin_tot)
-                if zero_range.any():
-                    gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))[gen_lookup]
-                    q_gen = np.where(zero_range, q_tot / gens_per_bus, q_gen)
-            else:
-                # no reactive-limit columns -> equal split is the only defensible convention
-                gens_per_bus = np.bincount(gen_lookup, minlength=len(net.bus))[gen_lookup]
-                q_gen = q_tot / gens_per_bus
-            res_gen["q_mvar"].to_numpy(copy=False)[:] = q_gen
-
         # -- calculate impedance results --
         # res_impedance has no vm_*/va_*/loading_percent columns (an impedance carries no
         # rating), so this is the short form of the line block. Losses are the SUM of both
@@ -431,12 +361,11 @@ class NewtonPowerflow:
             res_impedance["pl_mw"].to_numpy(copy=False)[:] = imp_power_from.real + imp_power_to.real
             res_impedance["ql_mvar"].to_numpy(copy=False)[:] = imp_power_from.imag + imp_power_to.imag
 
-        # -- calculate ext_grid results --
-        net.res_ext_grid = _ensure_index(net.res_ext_grid, net.ext_grid.index)
-        ext_grid_power = (sBus - self._sBus * net.sn_mva)[net.ext_grid.bus]
-        res_ext = net.res_ext_grid
-        res_ext["p_mw"].to_numpy(copy=False)[:] = ext_grid_power.real
-        res_ext["q_mvar"].to_numpy(copy=False)[:] = ext_grid_power.imag
+        # -- calculate gen / ext_grid results --
+        # The residual (computed minus scheduled injection) is what the voltage-controlling
+        # units supplied on top of their schedule; p3s.voltage_sources shares it out (Q in
+        # proportion to the units' reactive range, as pypower pfsoln._update_q).
+        write_unit_results(net, self._units, sBus - self._sBus * net.sn_mva, vm, va)
 
     def _pre_dc_solve(self, yBus: sparse, voltage: NDArray, Pinj: NDArray, ref, pvpq):
         # "DC" Lastfluss zur initialisierung
