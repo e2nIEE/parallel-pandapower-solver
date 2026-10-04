@@ -41,6 +41,40 @@ class ThreePort:
                 setattr(self, name, np.where(in_service, np.asarray(getattr(self, name)), 0.0))
         return in_service
 
+    def apply_open_ends(self, open_ends: NDArray) -> None:
+        """Disconnect terminals whose switch is open; ``open_ends`` is (n_element, 3) bool (hv, mv, lv).
+
+        As in pandapower (auxiliary bus at the open terminal) the element stays energised from its
+        other terminals: every open terminal k (no injection) is Kron-eliminated from the 3x3 block,
+            Y_ij' = Y_ij - Y_ik * Y_kj / Y_kk ,   row and column k -> 0
+        for the AC and the DC stamps. Subclasses update derived quantities in ``_after_open_ends``.
+        """
+        open_ends = np.asarray(open_ends, dtype=bool)
+        if not open_ends.any():
+            return
+        for names in (_STAMPS, _DC_STAMPS):
+            block = np.stack([np.asarray(getattr(self, name), dtype=complex) for name in names], axis=1)
+            block = block.reshape(-1, 3, 3)
+            for k in range(3):
+                rows = open_ends[:, k]
+                if not rows.any():
+                    continue
+                sub = block[rows]
+                y_kk = sub[:, k, k]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    update = np.einsum("ei,ej->eij", sub[:, :, k], sub[:, k, :]) / y_kk[:, None, None]
+                sub = np.where((y_kk != 0)[:, None, None], sub - update, sub)
+                sub[:, k, :] = 0.0
+                sub[:, :, k] = 0.0
+                block[rows] = sub
+            for idx, name in enumerate(names):
+                setattr(self, name, block[:, idx // 3, idx % 3])
+        self._after_open_ends(open_ends)
+        self.y_matrix = self.y_dc_matrix = None
+
+    def _after_open_ends(self, open_ends: NDArray) -> None:
+        """Hook for subclasses (derived per-element quantities)."""
+
     def _buses(self) -> tuple[NDArray, NDArray, NDArray]:
         return (
             np.asarray(self._hv_bus, dtype=np.intp),

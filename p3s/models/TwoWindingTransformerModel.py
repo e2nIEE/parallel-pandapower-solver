@@ -219,6 +219,7 @@ class TwoWindingTransformerModel(TwoPort):
         # /tap factor (b = 1/(x*tap), not 1/x). theta already includes the tap angle + the
         # fixed vector-group shift_degree. tap magnitude = |a|*|b| (one side is 1).
         p_shift_inj = np.where(in_service, theta / (x_sc * np.abs(a) * np.abs(b)), 0.0)
+        self._p_shift_inj = p_shift_inj  # per trafo, rebuilt by apply_open_ends
         self.p_shift = np.zeros(n_bus)
         np.add.at(self.p_shift, self._from_bus, p_shift_inj)
         np.add.at(self.p_shift, self._to_bus, -p_shift_inj)

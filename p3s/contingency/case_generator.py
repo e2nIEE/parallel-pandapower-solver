@@ -127,17 +127,22 @@ def _branch_stamps(npf: NewtonPowerflow):
     is keyed by table row) to its stamp.
     """
     elements = npf._ybus_elements
+    # The models stamp on bus positions; the Ybus lives on nodes (buses fused by closed bus-bus
+    # switches share one, unsupplied buses have none -- p3s.topology).
+    node_of_bus = npf._topology.node_of_bus
     for table in ("line", "trafo"):
         model = elements.get(table)
         if model is None:
             continue
-        fb = np.asarray(model._from_bus, dtype=np.intp)  # type: ignore[union-attr]
-        tb = np.asarray(model._to_bus, dtype=np.intp)  # type: ignore[union-attr]
+        fb = node_of_bus[np.asarray(model._from_bus, dtype=np.intp)]  # type: ignore[union-attr]
+        tb = node_of_bus[np.asarray(model._to_bus, dtype=np.intp)]  # type: ignore[union-attr]
         yff = np.asarray(model._Y_ff, dtype=complex)  # type: ignore[union-attr]
         yft = np.asarray(model._Y_ft, dtype=complex)  # type: ignore[union-attr]
         ytf = np.asarray(model._Y_tf, dtype=complex)  # type: ignore[union-attr]
         ytt = np.asarray(model._Y_tt, dtype=complex)  # type: ignore[union-attr]
         for i in range(len(fb)):
+            if fb[i] < 0 or tb[i] < 0:
+                continue  # unsupplied: not in the Ybus
             yield table, i, int(fb[i]), int(tb[i]), yff[i], yft[i], ytf[i], ytt[i]
 
 

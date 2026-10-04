@@ -35,13 +35,17 @@ from p3s.NewtonPowerflow import NewtonPowerflow
 
 def _rebuilt_ybus_without_group(net, group):
     """Ground-truth Ybus with the group's branches physically removed from the tables
-    (p3s's make_ybus does not filter in_service, so we drop the rows)."""
+    (p3s's make_ybus does not filter in_service, so we drop the rows).
+
+    The bus-level Ybus (``_YBus_bus``): an outage can cut buses off from the slack, and the
+    power-flow Ybus (``_YBus``) leaves unsupplied buses out, while the case generator keeps
+    the base pattern and handles islands itself."""
     ref_net = copy.deepcopy(net)
     for tbl in ("line", "trafo"):
         if tbl in ref_net and len(ref_net[tbl]) and "outage_group" in ref_net[tbl].columns:
             drop = ref_net[tbl].index[ref_net[tbl]["outage_group"] == group]
             ref_net[tbl].drop(index=drop, inplace=True)
-    Y = NewtonPowerflow(ref_net)._YBus.tocsr()
+    Y = NewtonPowerflow(ref_net)._YBus_bus.tocsr()
     Y.sort_indices()
     return Y
 

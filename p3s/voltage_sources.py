@@ -30,8 +30,8 @@ def voltage_sources(net: pandapowerNet, lookup: pd.Series) -> pd.DataFrame:
 
     Order matters: where an ext_grid and a gen share a bus, the ext_grid's voltage set point
     wins (it comes first), as in pandapower. Out-of-service units are left out entirely --
-    they neither define a bus type nor inject power.
-    ``bus`` is the Ybus row (``lookup`` maps pandapower bus index -> Ybus row).
+    they neither define a bus type nor inject power -- and so are units on unsupplied buses.
+    ``bus`` is the Ybus row (``lookup`` maps pandapower bus index -> Ybus row, -1 = unsupplied).
     """
     parts = []
     if "ext_grid" in net and len(net.ext_grid):
@@ -73,7 +73,8 @@ def voltage_sources(net: pandapowerNet, lookup: pd.Series) -> pd.DataFrame:
         )
     if not parts:
         return pd.DataFrame({c: [] for c in UNIT_COLUMNS}).astype({"bus": int, "slack": bool})
-    return pd.concat(parts, ignore_index=True)
+    units = pd.concat(parts, ignore_index=True)
+    return units[units.bus >= 0].reset_index(drop=True)
 
 
 def bus_types(units: pd.DataFrame, n_bus: int, initial_voltage: NDArray) -> tuple[NDArray, NDArray, NDArray]:
@@ -132,8 +133,11 @@ def _unit_results(units: pd.DataFrame, s_residual: NDArray) -> tuple[NDArray, ND
     return p, q
 
 
-def write_unit_results(net: pandapowerNet, units: pd.DataFrame, s_residual: NDArray, vm: NDArray, va: NDArray):
-    """Fill res_gen / res_ext_grid. Out-of-service units get 0 everywhere, as pandapower does."""
+def write_unit_results(
+    net: pandapowerNet, units: pd.DataFrame, s_residual: NDArray, vm: NDArray, va: NDArray
+) -> tuple[NDArray, NDArray]:
+    """Fill res_gen / res_ext_grid. Out-of-service units get 0 everywhere, as pandapower does.
+    Returns P and Q (MW, Mvar) per row of ``units``."""
     p, q = _unit_results(units, s_residual)
     bus = units.bus.to_numpy(dtype=int)
     for et in ("gen", "ext_grid"):
@@ -152,3 +156,4 @@ def write_unit_results(net: pandapowerNet, units: pd.DataFrame, s_residual: NDAr
             values[rows, 2] = vm[bus[sel]]
             values[rows, 3] = va[bus[sel]]
         res[cols] = values
+    return p, q

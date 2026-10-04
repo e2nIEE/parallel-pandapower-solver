@@ -261,6 +261,238 @@ def test_open_line_switch_disconnects_line():
     _assert_matches_pandapower(net)
 
 
+# Design (p3s.topology): buses joined by closed bus-bus switches are fused into one node; the
+# switch currents follow from KCL after the solve (weighted by z_ohm in switch loops); an open
+# line/trafo/trafo3w switch Kron-eliminates that terminal, so the branch stays energised from its
+# other end(s) as with pandapower's auxiliary bus.
+
+SOLVERS = pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+
+
+def _net_switch_feeder(n_switches: int = 1, z_ohm=(0.0,)) -> tuple[pandapowerNet, list[int]]:
+    """ext_grid - line - b1 =switch(es)= b2 - line - b3, loads at b2 and b3."""
+    net = create_empty_network(sn_mva=1.0)
+    b = [create_bus(net, vn_kv=110.0) for _ in range(4)]
+    create_ext_grid(net, b[0])
+    _line(net, b[0], b[1])
+    _line(net, b[2], b[3])
+    create_load(net, b[2], p_mw=20.0, q_mvar=8.0)
+    create_load(net, b[3], p_mw=10.0, q_mvar=4.0)
+    for k in range(n_switches):
+        create_switch(net, b[1], b[2], et="b", closed=True, z_ohm=z_ohm[k], in_ka=0.5)
+    return net, b
+
+
+def _current_into_b2_side(ref: pandapowerNet, b: list[int]) -> complex:
+    """kA flowing from b1 to b2 according to pandapower's (fused) solution: everything the elements
+    at b2 draw, i.e. its load, the line to b3 and minus a generator at b2 if any."""
+    s = (
+        ref.res_load.p_mw[0]
+        + 1j * ref.res_load.q_mvar[0]
+        + ref.res_line.p_from_mw[1]
+        + 1j * ref.res_line.q_from_mvar[1]
+    )
+    gens_at_b2 = ref.gen.index[ref.gen.bus == b[2]] if len(ref.gen) else []
+    for g in gens_at_b2:
+        s -= ref.res_gen.p_mw[g] + 1j * ref.res_gen.q_mvar[g]
+    v_kv = ref.res_bus.vm_pu[b[2]] * np.exp(1j * np.deg2rad(ref.res_bus.va_degree[b[2]])) * ref.bus.vn_kv[b[2]]
+    return np.conj(s / (np.sqrt(3) * v_kv))
+
+
+def _reference_pp(net: pandapowerNet) -> pandapowerNet:
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8)
+    return ref
+
+
+def _assert_res_matches(net, ref, table, columns=None, rtol=1e-6, atol=1e-6):
+    columns = columns or list(ref[table].columns)
+    for column in columns:
+        np.testing.assert_allclose(
+            net[table][column].to_numpy(float),
+            ref[table][column].to_numpy(float),
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"{table}.{column}",
+        )
+
+
+@SOLVERS
+def test_bus_bus_switch_current_and_fused_bus_results(solve):
+    """Tree: the KCL switch current equals what flows downstream of the switch, and every fused bus
+    reports its own elements (pandapower's res_bus)."""
+    net, b = _net_switch_feeder()
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus")
+    i_expected = _current_into_b2_side(ref, b)
+    assert net.res_switch.i_ka[0] == pytest.approx(abs(i_expected), rel=1e-6)
+    assert net.res_switch.loading_percent[0] == pytest.approx(abs(i_expected) / 0.5 * 100, rel=1e-6)
+    s_expected = np.sqrt(3) * ref.res_bus.vm_pu[b[1]] * 110.0 * np.exp(1j * np.deg2rad(ref.res_bus.va_degree[b[1]]))
+    s_expected *= np.conj(i_expected)
+    assert net.res_switch.p_from_mw[0] == pytest.approx(s_expected.real, rel=1e-6)
+    assert net.res_switch.q_from_mvar[0] == pytest.approx(s_expected.imag, rel=1e-6)
+    assert net.res_switch.p_to_mw[0] == pytest.approx(-s_expected.real, rel=1e-6)
+
+
+@SOLVERS
+@pytest.mark.parametrize("z_ohm, share", [((0.0, 0.0), 0.5), ((0.010, 0.030), 0.75), ((0.0, 0.020), 1.0)])
+def test_switch_loop_splits_by_contact_impedance(z_ohm, share, solve):
+    """Two parallel closed switches (a zero-impedance loop): the current splits by 1/z_ohm; a z_ohm
+    of 0 counts as a (much smaller) placeholder, so it takes the whole current against z > 0."""
+    net, b = _net_switch_feeder(n_switches=2, z_ohm=z_ohm)
+    ref = _reference_pp(_net_switch_feeder()[0])  # pandapower fuses only z_ohm == 0; same flows
+    solve(net)
+    total = abs(_current_into_b2_side(ref, b))
+    np.testing.assert_allclose(
+        net.res_switch.i_ka.to_numpy(float), [share * total, (1 - share) * total], rtol=1e-4, atol=1e-4 * total
+    )
+
+
+@SOLVERS
+def test_switch_between_two_generators(solve):
+    """PV - switch - PV: fine after fusion (the +-jX switch model is singular here). The units share
+    the node's Q by pandapower's rule; the switch current follows from that split."""
+    net, b = _net_switch_feeder()
+    create_gen(net, b[1], p_mw=5.0, vm_pu=1.01)
+    create_gen(net, b[2], p_mw=5.0, vm_pu=1.01)
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus", ["vm_pu", "va_degree"])
+    _assert_res_matches(net, ref, "res_gen")
+    assert net.res_switch.i_ka[0] == pytest.approx(abs(_current_into_b2_side(ref, b)), rel=1e-6)
+
+
+def _net_open_ends() -> pandapowerNet:
+    """A meshed net with an open line switch, an open trafo switch (lv side) and a trafo3w with an
+    open mv terminal -- every branch stays connected at its other end(s)."""
+    net = create_empty_network(sn_mva=1.0)
+    hv = [create_bus(net, vn_kv=110.0) for _ in range(3)]
+    mv = [create_bus(net, vn_kv=20.0) for _ in range(2)]
+    lv = create_bus(net, vn_kv=10.0)
+    create_ext_grid(net, hv[0])
+    _line(net, hv[0], hv[1])
+    _line(net, hv[1], hv[2])
+    ring = create_line_from_parameters(net, hv[0], hv[2], length_km=40.0, **LINE)
+    create_switch(net, hv[2], ring, et="l", closed=False)
+    t_params = dict(
+        sn_mva=40.0, vn_hv_kv=110.0, vn_lv_kv=20.0, vk_percent=12.0, vkr_percent=0.4, pfe_kw=20.0, i0_percent=0.05
+    )
+    create_transformer_from_parameters(net, hv[1], mv[0], **t_params)
+    t_open = create_transformer_from_parameters(net, hv[2], mv[0], **t_params)
+    create_switch(net, mv[0], t_open, et="t", closed=False)
+    t3 = create_transformer3w_from_parameters(
+        net,
+        hv[2],
+        mv[1],
+        lv,
+        vn_hv_kv=110.0,
+        vn_mv_kv=20.0,
+        vn_lv_kv=10.0,
+        sn_hv_mva=40.0,
+        sn_mv_mva=25.0,
+        sn_lv_mva=15.0,
+        vk_hv_percent=12.0,
+        vk_mv_percent=10.0,
+        vk_lv_percent=8.0,
+        vkr_hv_percent=0.4,
+        vkr_mv_percent=0.35,
+        vkr_lv_percent=0.3,
+        pfe_kw=25.0,
+        i0_percent=0.06,
+    )
+    create_switch(net, mv[1], t3, et="t3", closed=False)
+    _line(net, mv[0], mv[1], length_km=2.0)  # mv[1] fed from mv[0], not through the open trafo3w port
+    create_load(net, mv[0], p_mw=15.0, q_mvar=5.0)
+    create_load(net, mv[1], p_mw=5.0, q_mvar=2.0)
+    create_load(net, lv, p_mw=3.0, q_mvar=1.0)
+    return net
+
+
+@SOLVERS
+def test_open_branch_switches_keep_charging(solve):
+    """Open line / trafo / trafo3w switches: as pandapower (auxiliary bus at the open end), the
+    branch keeps its charging / magnetising and reports the open end's voltage."""
+    net = _net_open_ends()
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus")
+    _assert_res_matches(net, ref, "res_ext_grid")
+    _assert_res_matches(net, ref, "res_line")
+    _assert_res_matches(net, ref, "res_trafo")
+    # p3s reports the bus voltage at an open trafo3w terminal (pandapower: its auxiliary bus)
+    t3_cols = [c for c in ref.res_trafo3w.columns if not c.endswith(("mv_pu", "mv_degree"))]
+    _assert_res_matches(net, ref, "res_trafo3w", t3_cols)
+    assert net.res_line.i_to_ka[2] == 0.0 and net.res_line.i_from_ka[2] > 0.0  # charging only
+    # res_switch: open switches carry nothing
+    np.testing.assert_allclose(net.res_switch.i_ka.to_numpy(float), 0.0, atol=1e-12)
+
+
+@SOLVERS
+def test_line_losses_include_charging(solve):
+    """res_line.pl_mw / ql_mvar = what enters the line at both ends, as pandapower. A lightly loaded
+    cable ring generates reactive power (ql < 0); on the middle cable both ends push Q out of it,
+    where the former |abs(q_to) - abs(q_from)| reported 0.33 Mvar instead of -23 Mvar."""
+    net = create_empty_network(sn_mva=1.0)
+    b = [create_bus(net, vn_kv=110.0) for _ in range(3)]
+    create_ext_grid(net, b[0])
+    cable = dict(length_km=20.0, r_ohm_per_km=0.03, x_ohm_per_km=0.12, c_nf_per_km=300.0, max_i_ka=1.0)
+    for f, t in ((0, 1), (1, 2), (2, 0)):
+        create_line_from_parameters(net, b[f], b[t], **cable)
+    create_load(net, b[1], p_mw=2.0, q_mvar=0.5)
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_line")
+    assert (net.res_line.ql_mvar < 0).all()
+
+
+@SOLVERS
+def test_closed_line_switch_current_is_the_line_end_current(solve):
+    net, b = _net_feeder(3)
+    create_ext_grid(net, b[0])
+    line = net.line.index[1]
+    create_switch(net, b[1], line, et="l", closed=True, in_ka=0.4)  # from end
+    create_switch(net, b[2], line, et="l", closed=True)  # to end
+    solve(net)
+    assert net.res_switch.i_ka[0] == pytest.approx(net.res_line.i_from_ka[line], rel=1e-12)
+    assert net.res_switch.i_ka[1] == pytest.approx(net.res_line.i_to_ka[line], rel=1e-12)
+    assert net.res_switch.p_from_mw[0] == pytest.approx(net.res_line.p_from_mw[line], rel=1e-12)
+    assert net.res_switch.loading_percent[0] == pytest.approx(net.res_line.i_from_ka[line] / 0.4 * 100, rel=1e-12)
+
+
+@SOLVERS
+def test_unsupplied_area(solve):
+    """Buses behind an open switch: NaN voltages, no flows, NaN switch results -- like pandapower --
+    and the rest of the grid solves normally."""
+    net, b = _net_feeder(3)
+    create_ext_grid(net, b[0])
+    iso = [create_bus(net, vn_kv=110.0) for _ in range(3)]
+    create_switch(net, b[2], iso[0], et="b", closed=False)
+    create_switch(net, iso[0], iso[1], et="b", closed=True)
+    _line(net, iso[1], iso[2])
+    create_load(net, iso[2], p_mw=5.0, q_mvar=2.0)
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus")
+    _assert_res_matches(net, ref, "res_line")
+    assert net.res_switch.i_ka[0] == 0.0  # open
+    assert np.isnan(net.res_switch.i_ka[1])  # closed, but unsupplied
+
+
+def test_calculate_returns_bus_voltages():
+    """NewtonPowerflowCpp.calculate solves on nodes but returns one voltage per net.bus row."""
+    net, b = _net_switch_feeder()
+    iso = create_bus(net, vn_kv=110.0)
+    create_switch(net, b[3], iso, et="b", closed=False)
+    npf, v = _solve_p3s(net)
+    assert npf._YBus.shape == (3, 3)  # b1/b2 fused, iso unsupplied
+    assert len(v) == len(net.bus)
+    assert v[b[1]] == v[b[2]] and np.isnan(v[iso])
+    # a start voltage per bus is accepted as well
+    v2 = npf.calculate(net, init="flat", voltage=v, tolerance=1e-8, voltage_band=None)
+    np.testing.assert_allclose(v2, v, atol=1e-10)
+
+
 # --- 5. trafo rated voltage != bus nominal voltage ------------------------------------------
 
 

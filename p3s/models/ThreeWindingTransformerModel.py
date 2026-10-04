@@ -188,29 +188,57 @@ class ThreeWindingTransformerModel(ThreePort):
 
         self.in_service = self._apply_in_service(t3)
 
-        # DC phase-shift injection (TwoWindingTransformerModel convention: RHS = Sbus.real + p_shift)
-        p_shift_inj = b * delta - b * (np.sum(b * delta, axis=1) / b_sum)[:, None]
+        # kept to rebuild the star voltage and the DC injection when a winding is switched off
+        self._y, self._y_a, self._y_b, self._s, self._y_0 = y, y_a, y_b, s, y_0
+        self._dc_b, self._dc_delta = b, delta
         # Iron losses at the star node (loss_side "star") are a DC load at pandapower's auxiliary
-        # bus (a shunt conductance counts as load at 1 pu there); eliminating the star node
-        # spreads it over the terminals in proportion to b_k.
-        p_star = -np.real(y_0) / c[:, 0] ** 2
-        p_shift_inj += b / b_sum[:, None] * p_star[:, None]
+        # bus (a shunt conductance counts as load at 1 pu there).
+        self._p_star = -np.real(y_0) / c[:, 0] ** 2
+        self.p_shift: NDArray = np.zeros(len(bus_table))
+        self._update_dc_injection(np.ones((n, 3), dtype=bool))
+
+    def _update_dc_injection(self, connected: NDArray) -> None:
+        """DC phase-shift injection (TwoWindingTransformerModel convention: RHS = Sbus.real +
+        p_shift) of the connected windings, star node eliminated; the star-node load spreads over
+        the terminals in proportion to b_k."""
+        b = np.where(connected, self._dc_b, 0.0)
+        b_sum = b.sum(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            share = np.where(b_sum[:, None] > 0, b / b_sum[:, None], 0.0)
+        p_shift_inj = b * self._dc_delta - share * np.sum(b * self._dc_delta, axis=1)[:, None]
+        p_shift_inj += share * self._p_star[:, None]
         p_shift_inj[~self.in_service] = 0.0
-        self.p_shift = np.zeros(len(bus_table))
+        self.p_shift[:] = 0.0
         for k, buses in enumerate(self._buses()):
             np.add.at(self.p_shift, buses, p_shift_inj[:, k])
 
+    def _after_open_ends(self, open_ends: NDArray) -> None:
+        """A winding disconnected by an open switch: no DC flow through it, and for the star voltage
+        it is just a shunt hanging off the star node (its branch ends in its terminal shunt)."""
+        connected = ~open_ends
+        y, y_a, y_b, s = self._y, self._y_a, self._y_b, self._s
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dangling = np.where(y + y_a != 0, y * y_a / (y + y_a), 0.0)
+        abs_s2 = np.square(np.abs(s))
+        self._w = np.where(connected, self._w, 0.0)
+        self._star_sum = self._y_0 + np.sum(abs_s2 * (y_b + np.where(connected, y, dangling)), axis=1)
+        self._update_dc_injection(connected)
+
     def results(self, voltage: NDArray, sn_mva: float) -> dict[str, NDArray]:
-        """res_trafo3w columns for the solved bus voltages, as pandapower defines them."""
+        """res_trafo3w columns for the solved bus voltages (NaN on unsupplied buses), as pandapower
+        defines them."""
+        reported = voltage[np.stack(self._buses(), axis=1)]
+        voltage = np.nan_to_num(voltage)
         current = self.port_currents(voltage)  # (n, 3), into the transformer
         buses = np.stack(self._buses(), axis=1)
         v_bus = voltage[buses]
-        vm = np.abs(v_bus)
+        vm = np.abs(reported)
         s_mva = v_bus * np.conj(current) * sn_mva
-        i_ka = np.abs(s_mva) / (np.sqrt(3) * vm * self.vn_bus)
+        i_ka = np.abs(s_mva) / (np.sqrt(3) * np.where(np.isnan(vm), 1.0, vm) * self.vn_bus)
 
         # star voltage, per unit of the hv bus voltage (pandapower's auxiliary bus)
         v_star = np.sum(self._w * v_bus / self._t, axis=1) / self._star_sum * (self.vn_rated[:, 0] / self.vn_bus[:, 0])
+        energised = self.in_service & ~np.isnan(reported).all(axis=1)
 
         res = {}
         for k, side in enumerate(SIDES):
@@ -222,9 +250,9 @@ class ThreeWindingTransformerModel(ThreePort):
             res[f"i_{side}_ka"] = i_ka[:, k]
         for k, side in enumerate(SIDES):
             res[f"vm_{side}_pu"] = vm[:, k]
-            res[f"va_{side}_degree"] = np.angle(v_bus[:, k], deg=True)
-        res["va_internal_degree"] = np.where(self.in_service, np.angle(v_star, deg=True), np.nan)
-        res["vm_internal_pu"] = np.where(self.in_service, np.abs(v_star), np.nan)
+            res[f"va_{side}_degree"] = np.angle(reported[:, k], deg=True)
+        res["va_internal_degree"] = np.where(energised, np.angle(v_star, deg=True), np.nan)
+        res["vm_internal_pu"] = np.where(energised, np.abs(v_star), np.nan)
         loading = np.max(i_ka * self.vn_rated * np.sqrt(3) / self.sn * 100.0, axis=1)  # trafo_loading="current"
-        res["loading_percent"] = np.where(self.in_service, loading, 0.0)
+        res["loading_percent"] = np.where(energised, loading, 0.0)
         return res
