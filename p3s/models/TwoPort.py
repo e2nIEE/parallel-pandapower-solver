@@ -10,6 +10,11 @@ from scipy.sparse import coo_matrix as sparse
 
 class TwoPort:
     def __init__(self):
+        self._both_open: NDArray | None = None
+        self._open_from_gain: NDArray | None = None
+        self._open_to_gain: NDArray | None = None
+        self._p_shift_inj: NDArray | None = None
+        self.p_shift: NDArray | None = None
         self._from_bus = []
         self._to_bus = []
         self._Y_ff = []
@@ -60,6 +65,70 @@ class TwoPort:
             setattr(self, attr, np.where(in_service, values, 0.0))
 
         return in_service
+
+    def apply_open_ends(self, open_ends: NDArray) -> None:
+        """Disconnect branch ends whose switch is open; ``open_ends`` is (n_branch, 2) bool (from, to).
+
+        As in pandapower, which hangs the open end on an auxiliary bus, the branch stays energised
+        from its other end: the open terminal (no injection) is Kron-eliminated from the stamp,
+            Y_ff' = Y_ff - Y_ft * Y_tf / Y_tt     (to end open; from end analogous)
+        so line charging / magnetising remain while no current passes the open end. Both ends
+        open leaves nothing. The open-end voltage is kept for the results (``end_voltages``).
+        """
+        open_ends = np.asarray(open_ends, dtype=bool)
+        if not open_ends.any():
+            return
+        n = len(np.asarray(self._from_bus))
+        open_f, open_t = open_ends[:, 0], open_ends[:, 1]
+
+        def _stamps(names):
+            return [np.broadcast_to(np.asarray(getattr(self, a), dtype=complex), (n,)).copy() for a in names]
+
+        def _eliminate(ff, ft, tf, tt):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ff_red = np.where(tt != 0, ff - ft * tf / tt, ff)
+                tt_red = np.where(ff != 0, tt - tf * ft / ff, tt)
+            ff_new = np.where(open_f, 0.0, np.where(open_t, ff_red, ff))
+            tt_new = np.where(open_t, 0.0, np.where(open_f, tt_red, tt))
+            either = open_f | open_t
+            return ff_new, np.where(either, 0.0, ft), np.where(either, 0.0, tf), tt_new
+
+        ac = _stamps(("_Y_ff", "_Y_ft", "_Y_tf", "_Y_tt"))
+        # open-end voltage from the closed end: V_t = -Y_tf / Y_tt * V_f, V_f = -Y_ft / Y_ff * V_t
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self._open_to_gain = np.where(open_t & ~open_f, -ac[2] / ac[3], np.nan)
+            self._open_from_gain = np.where(open_f & ~open_t, -ac[1] / ac[0], np.nan)
+        self._both_open = open_f & open_t
+        self._Y_ff, self._Y_ft, self._Y_tf, self._Y_tt = _eliminate(*ac)
+        dc_names = ("_DC_Yff", "_DC_Yft", "_DC_Ytf", "_DC_Ytt")
+        if all(len(np.shape(getattr(self, a, []))) for a in dc_names):
+            self._DC_Yff, self._DC_Yft, self._DC_Ytf, self._DC_Ytt = _eliminate(*_stamps(dc_names))
+
+        # a disconnected end carries no flow, so no DC phase-shift injection either
+        p_shift_inj = getattr(self, "_p_shift_inj", None)
+        if p_shift_inj is not None:
+            self._p_shift_inj = np.where(open_f | open_t, 0.0, p_shift_inj)
+            self.p_shift = np.zeros_like(self.p_shift)
+            np.add.at(self.p_shift, np.asarray(self._from_bus, dtype=np.intp), self._p_shift_inj)
+            np.add.at(self.p_shift, np.asarray(self._to_bus, dtype=np.intp), -self._p_shift_inj)
+        self.y_matrix = self.y_dc_matrix = None
+
+    def end_voltages(self, voltage: NDArray) -> tuple[NDArray, NDArray]:
+        """Voltage at the from / to end of every branch; at an open end the voltage of the
+        disconnected terminal (pandapower's auxiliary bus), NaN when both ends are open."""
+        fb = np.asarray(self._from_bus, dtype=np.intp)
+        tb = np.asarray(self._to_bus, dtype=np.intp)
+        v_f, v_t = voltage[fb].astype(complex), voltage[tb].astype(complex)
+        gain_t = getattr(self, "_open_to_gain", None)
+        if gain_t is not None:
+            gain_f = self._open_from_gain
+            v_t_open = gain_t * v_f
+            v_f_open = gain_f * v_t
+            v_t = np.where(np.isnan(gain_t), v_t, v_t_open)
+            v_f = np.where(np.isnan(gain_f), v_f, v_f_open)
+            v_f = np.where(self._both_open, np.nan, v_f)
+            v_t = np.where(self._both_open, np.nan, v_t)
+        return v_f, v_t
 
     def create_y_matrix(self, n_bus: int) -> sparse:
         if self.y_matrix and n_bus == self._n_bus:

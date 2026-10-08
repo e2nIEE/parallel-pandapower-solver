@@ -68,7 +68,8 @@ rb = s.solve_batch(Sbus_mat, V0, max_iter=30, tol=1e-8, n_threads=0)
 Vb = rb["V"]  # complex128 (n, T)
 iters = rb["iterations"]  # int32  (T,)
 converged = rb["converged"]  # bool   (T,)
-# n_threads: 0 = all CPU cores (OpenMP), 1 = serial. Results are thread-invariant.
+# n_threads: 0 = OpenMP default (OMP_NUM_THREADS, else all CPUs available to the process),
+# 1 = serial. Results are thread-invariant.
 
 # --- stateless one-shot (analyze + factor every call) ---
 r = nr_klu.solve_single(Yp, Yj, Yx, Sbus, V0, pv, pq, max_iter=30, tol=1e-8, ordering=0, btf=0)
@@ -94,6 +95,15 @@ as the GPU `calculate_timeseries_cuda`).
 
 On case9241pegase the batch is **~85–93× faster than a scipy Newton loop**, with ~4.4×
 of that from OpenMP threading (1→8 cores; sub-linear beyond, memory-bandwidth bound).
+
+**Threads on clusters.** `n_threads=0` uses OpenMP's default: `OMP_NUM_THREADS` if set,
+otherwise every CPU the process may run on. That respects `taskset` and SLURM CPU
+allocations (`std::thread::hardware_concurrency()`, used before, reported every CPU of the
+node and oversubscribed the allocation). Explicit counts are capped at the available CPUs.
+Do **not** export `OMP_PROC_BIND` / `OMP_PLACES` for Python processes that also run other
+multi-threaded libraries: the OpenMP runtime pins the importing (main) thread to one place
+when it starts, and every thread created from it later -- e.g. lightsim2grid's
+`InjectionSweep` workers -- inherits that single core.
 
 **Inputs** (all 0-based, `Ybus` in CSR):
 - `Yp` (`int32`, `n+1`), `Yj` (`int32`, `nnz`), `Yx` (`complex128`, `nnz`) — CSR `Ybus`.
@@ -144,7 +154,7 @@ pip install parallel-pandapower-solver[cpp]
 pip install ./p3s/cpp
 
 # local dev build tuned for the host CPU (-march=native):
-pip install ./p3s/cpp --config-settings=cmake.define.p3s_CPP_NATIVE=ON
+pip install ./p3s/cpp --config-settings=cmake.define.P3S_CPP_NATIVE=ON
 ```
 
 Windows notes:

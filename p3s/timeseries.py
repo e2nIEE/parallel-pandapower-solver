@@ -59,16 +59,17 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
 
     for element in net_elements:
         sign = 1.0 if element == "load" else -1.0
-        lookup = net[element]["_lookup"].to_numpy().astype(int)
+        lookup = net[element]["_lookup"].to_numpy().astype(int)  # node, -1 = unsupplied bus
+        supplied = lookup >= 0
         base_p = net[element].p_mw.to_numpy()
         base_q = net[element].q_mvar.to_numpy() if "q_mvar" in net[element] else np.zeros_like(base_p)
 
         if (element, "p_mw") in timeseries:
             dP = timeseries[(element, "p_mw")] - base_p[:, None]  # (n_el, T)
-            np.add.at(sbus_matrix, lookup, (-sign * dP / sn).astype(np.complex128))
+            np.add.at(sbus_matrix, lookup[supplied], (-sign * dP[supplied] / sn).astype(np.complex128))
         if (element, "q_mvar") in timeseries:
             dQ = timeseries[(element, "q_mvar")] - base_q[:, None]
-            np.add.at(sbus_matrix, lookup, (-sign * (1j * dQ) / sn).astype(np.complex128))
+            np.add.at(sbus_matrix, lookup[supplied], (-sign * (1j * dQ[supplied]) / sn).astype(np.complex128))
 
     return sbus_matrix
 

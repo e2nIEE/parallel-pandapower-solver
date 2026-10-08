@@ -42,5 +42,8 @@ cmake.version = ">=3.18"
 cmake.build-type = "Release"
 # Don't tune for the build host when producing a wheel (keep it portable); a local
 # `pip install ./p3s/cpp` can re-enable it with
-#   --config-settings=cmake.define.p3s_CPP_NATIVE=ON
-cmake.define.p3s_CPP_NATIVE = "OFF"
+#   --config-settings=cmake.define.P3S_CPP_NATIVE=ON
+# The name must match the CMake option exactly: CMake variables are case-sensitive, and an
+# earlier lowercase spelling here was silently ignored, so wheels were built with
+# -march=native / /arch:AVX2 after all (risking illegal-instruction crashes on older CPUs).
+cmake.define.P3S_CPP_NATIVE = "OFF"

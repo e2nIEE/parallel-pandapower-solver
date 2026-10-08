@@ -28,6 +28,7 @@
 extern "C" {
 #include <klu.h>
 }
+#include "finite.hpp"
 
 struct LeanLU {
     bool valid = false;
@@ -76,7 +77,8 @@ inline bool lean_build(LeanLU& pl, int n, const int* Ap, const int* Ai,
                 pmin = std::min(pmin, a);
                 pmax = std::max(pmax, a);
             }
-    if (!(pmax > 0.0) || !std::isfinite(pmax) || !(pmin > 0.0)) return false;
+    // p3s_isfinite, not std::isfinite: the latter is folded to true under -ffast-math.
+    if (!p3s_isfinite(pmax) || !p3s_isfinite(pmin) || !(pmax > 0.0) || !(pmin > 0.0)) return false;
     pl.rcond0 = pmin / pmax;
 
     std::vector<int> Pinv(n);
@@ -145,6 +147,10 @@ inline double lean_refactor(const LeanLU& pl, const double* Ax, double* LU, doub
     const int* row = pl.row.data();
     double pmin = INFINITY, pmax = 0.0;
     bool finite = true;
+    // NaN/Inf pivots propagate into this sum, so one p3s_isfinite test after the loop catches
+    // them. Testing every pivot with p3s_isfinite (std::isfinite is folded away under
+    // -ffast-math, see finite.hpp) measured ~4% slower end-to-end on pegase with MSVC.
+    double asum = 0.0;
     for (int k = 0; k < pl.n; ++k) {
         for (int e = pl.aK[k]; e < pl.aK[k + 1]; ++e) x[pl.aRow[e]] += Ax[pl.aSrc[e]];
         for (int d = pl.dK[k]; d < pl.dK[k + 1]; ++d) {
@@ -158,13 +164,15 @@ inline double lean_refactor(const LeanLU& pl, const double* Ax, double* LU, doub
         x[k] = 0.0;
         LU[dp] = piv;
         const double a = std::fabs(piv);
-        if (!(a > 0.0) || !std::isfinite(a)) finite = false;
+        if (!(a > 0.0)) finite = false;   // zero pivot (NaN is caught via asum below)
+        asum += a;
         pmin = std::min(pmin, a);
         pmax = std::max(pmax, a);
         const double inv = 1.0 / piv;
         for (int q = dp + 1; q < pl.cp[k + 1]; ++q) { const int r = row[q]; LU[q] = x[r] * inv; x[r] = 0.0; }
     }
-    if (!finite || pmax == 0.0) return 0.0;
+    // A NaN/Inf pivot rejects the plan for this matrix (the caller falls back to KLU).
+    if (!finite || !p3s_isfinite(asum) || pmax == 0.0) return 0.0;
     return pmin / pmax;
 }
 
