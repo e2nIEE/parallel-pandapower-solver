@@ -18,6 +18,7 @@ import pytest
 from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import ground_truth
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
+from tests.util import runs_cleanly
 
 pytest.importorskip("pycuda", reason="pycuda not installed")
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
@@ -35,25 +36,25 @@ except Exception as e:  # pragma: no cover - environment dependent
     pytest.skip(f"CUDA unavailable: {e}", allow_module_level=True)
 
 
+_PROBE = """
+import sys
+from p3s.contingency.fixtures import FIXTURES
+from p3s.contingency.solver_cuda import solve_contingencies_cuda
+r = solve_contingencies_cuda(FIXTURES["parallel_branch"](), backend=sys.argv[1])
+sys.exit(0 if bool(r.converged.all()) else 1)
+"""
+
+
 def _detect_backends():
     """Return the linear-solve backends usable in THIS environment.
 
-    Backends vary by CUDA install: cusolverRf ("rf") segfaults on CUDA 12.4; cuDSS
+    Backends vary by CUDA install: cusolverRf ("rf") segfaults on CUDA 12.4+; cuDSS
     ("cudss") needs libcudss. We probe each on a tiny fixture and keep only those that
     solve correctly, so the parametrized tests run on whatever the machine supports.
+    Each probe runs in a subprocess: a segfault cannot be caught in-process and would
+    otherwise kill the whole pytest session during collection.
     """
-    from p3s.contingency.solver_cuda import solve_contingencies_cuda as _solve
-
-    net = FIXTURES["parallel_branch"]()
-    ok = []
-    for b in ("rf", "qr", "cudss"):
-        try:
-            r = _solve(net, backend=b)
-            if bool(r.converged.all()):
-                ok.append(b)
-        except Exception:
-            pass
-    return ok
+    return [b for b in ("rf", "qr", "cudss") if runs_cleanly(_PROBE, b)]
 
 
 _AVAILABLE_BACKENDS = _detect_backends()

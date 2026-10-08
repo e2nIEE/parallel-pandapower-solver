@@ -16,9 +16,26 @@ from pandapower.networks import case9, case14, case118, case9241pegase
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
+from tests.util import runs_cleanly
+
 pytest.importorskip("pycuda.driver", reason="pycuda is not installed")
 
 from p3s.cuda.cusolver_rf_batch import CusolverRfBatch  # noqa: E402
+
+# cusolverRf is deprecated and segfaults inside symbolic_setup on CUDA 12.4+ (see
+# p3s/cuda/diagnose_gpu.py). Probe it out of process so a crash skips this module
+# instead of killing the whole pytest session.
+_PROBE = """
+from pandapower import runpp
+from pandapower.networks import case9
+from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+net = case9()
+runpp(net)
+J = net["_ppc"]["internal"]["J"].tocsr()
+CusolverRfBatch(J.indptr, J.indices, batch_size=2).symbolic_setup(J.data)
+"""
+if not runs_cleanly(_PROBE):
+    pytest.skip("cusolverRf crashes or fails in this CUDA environment", allow_module_level=True)
 
 CASES = {"case9": case9(), "case14": case14(), "case118": case118(), "case9241": case9241pegase()}
 

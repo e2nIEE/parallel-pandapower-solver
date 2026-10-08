@@ -21,6 +21,7 @@
 // We construct J directly from Ybus (CSR) without forming dS_dV explicitly,
 // using the standard polar derivative formulas.
 
+#include <algorithm>
 #include <vector>
 #include <complex>
 #include <cmath>
@@ -43,19 +44,28 @@
 extern "C" {
 #include <klu.h>
 }
+#include "lean_lu.hpp"
+#include "finite.hpp"
 
 namespace py = pybind11;
 using cd = std::complex<double>;
 
 // Portable sin+cos. POSIX/glibc expose ::sincos (one call, used on Linux); MSVC and
-// other libcs do not, so fall back to separate std::sin/std::cos there (the compiler
-// still fuses them well under fast-math).
+// other libcs do not, so fall back to separate std::sin/std::cos there.
+//
+// This is the hot primitive: one call per Ybus nonzero per Newton iteration, and
+// eval_F_and_J is ~25% of solve time on pegase (docs/nr_klu_vectorization_plan.md).
+// It is worth what /fp:fast plus a vector ISA can do for it -- adding /arch:AVX2 on
+// MSVC measured 1.5-1.8x on eval_F_and_J -- so keep the build flags in mind before
+// concluding this function is slow.
 static inline void nr_sincos(double x, double* s, double* c) {
 #if defined(__GNUC__) && !defined(__clang__)
     // glibc/g++ (Linux): single fused sincos.
     ::sincos(x, s, c);
 #else
-    // MSVC / clang / other libc: no sincos -- separate calls (fused under fast-math).
+    // MSVC / clang / other libc: no sincos -- separate calls. Under /fp:fast MSVC may
+    // substitute SVML and vectorize the surrounding loop; that has NOT been confirmed
+    // by disassembly here, so do not rely on it when reasoning about cost.
     *s = std::sin(x);
     *c = std::cos(x);
 #endif
@@ -103,6 +113,12 @@ struct Topology {
     klu_common SymCommon;
     klu_symbolic* Symbolic = nullptr;
 
+    // Lean static-pivot refactorization plan (lean_lu.hpp): KLU's pivot order and L/U
+    // pattern, frozen from one klu_factor of the flat-start Jacobian in build_topology.
+    // Every Newton iteration refactors on it; KLU proper is only the fallback. Invalid
+    // (and unused) if that factorization failed or BTF split the matrix into blocks.
+    LeanLU lean;
+
     ~Topology() {
         if (Symbolic) klu_free_symbolic(&Symbolic, &SymCommon);
     }
@@ -145,6 +161,20 @@ struct SolveState {
     klu_numeric* Numeric = nullptr;
     bool factored = false;
 
+    // Pivot-reuse guard (batch paths). A pooled state carries its Numeric -- and so its
+    // pivot order -- over from the previous column. `check_reuse` asks run_newton to
+    // test the first refactor of such a column: if klu_rcond drops below
+    // REUSE_RCOND_RATIO * rcond_fresh (the rcond of this state's last klu_factor),
+    // the inherited pivot order is rejected and a fresh klu_factor is done instead.
+    bool   check_reuse = false;
+    double rcond_fresh = 0.0;
+
+    // Lean refactorization buffers (only when topo.lean is valid). `use_lean` is reset to
+    // true at the start of every solve; run_newton clears it when the frozen pivot order
+    // is rejected for this operating point, which hands the rest of the solve to KLU.
+    std::vector<double> LU, lu_x, lu_y;
+    bool use_lean = true;
+
     explicit SolveState(const Topology& topo) {
         Jx.assign(topo.Ji.size(), 0.0);
         Vm.assign(topo.n, 0.0);
@@ -156,9 +186,20 @@ struct SolveState {
         F.assign(topo.m, 0.0);
         rhs.assign(topo.m, 0.0);
         klu_defaults(&Common);
+        if (topo.lean.valid) {
+            LU.assign(topo.lean.nnz(), 0.0);
+            lu_x.assign(topo.m, 0.0);
+            lu_y.assign(topo.m, 0.0);
+        }
     }
     ~SolveState() {
         if (Numeric) klu_free_numeric(&Numeric, &Common);
+    }
+    // Forget the factorization so the next run_newton starts with a fresh klu_factor.
+    void drop_numeric() {
+        if (Numeric) klu_free_numeric(&Numeric, &Common);
+        factored = false;
+        check_reuse = false;
     }
     // non-copyable (owns a KLU numeric handle)
     SolveState(const SolveState&) = delete;
@@ -253,9 +294,8 @@ static void build_J_pattern(Topology& w) {
 //   dQ_i/dVm_j =  Vm_i*Ym_ij*sin(delta)           (block 3)
 // Diagonal terms accumulate the negative row-sum (for dVa) and special dVm.
 //
-// We follow the convention used in p3s/loadflow_csr.cpp (verified against
-// the scipy reference). To keep diagonal accumulation correct we compute, per
-// Ybus row, the four "dPQ_dVma"-style data arrays exactly like loadflow_csr,
+// To keep diagonal accumulation correct we compute, per Ybus row,
+// the four "dPQ_dVma"-style data arrays exactly like loadflow_csr,
 // then gather into J via (src_k, src_block).
 // ----------------------------------------------------------------------------
 // Fused: in ONE traversal of Ybus, compute both the bus power injections P/Q
@@ -281,7 +321,8 @@ static void eval_F_and_J(const Topology& w, SolveState& st, const double* Vm, co
     // are written from the prow/qrow locals, so a blanket assign(4*nnzY, 0.0) was a dead
     // ~1.2 MB memset per iteration on pegase (4 * 37655 * 8 B). The ONLY slots that
     // accumulate (+=/-=) rather than being assigned are the four diagonals [dix], so
-    // those -- and only those -- are cleared, below.
+    // those -- and only those -- are cleared, below. See docs/nr_klu_vectorization_plan.md
+    // step 2.
     if (buf.size() < (size_t)4 * nnzY) buf.resize((size_t)4 * nnzY);
     double* dP_dVa = buf.data();
     double* dQ_dVa = buf.data() + nnzY;
@@ -382,6 +423,26 @@ static void eval_F_and_J(const Topology& w, SolveState& st, const double* Vm, co
     }
 }
 
+// Mismatch infinity-norm that cannot mistake NaN for convergence. std::max(n, NaN) returns n,
+// so a plain max-reduction silently drops NaN entries: a NaN mismatch (NaN admittance, a step
+// that blew up) scored as 0 and the solve reported "converged" with NaN voltages. Any
+// non-finite entry yields NONFINITE_NORM instead -- a finite sentinel rather than +inf, so the
+// Armijo test `new <= (1 - c*alpha) * old` stays false between two non-finite norms. NaN/Inf
+// entries propagate into a running sum, so one p3s_isfinite test after the loop detects them
+// (std::isfinite is folded away under -ffast-math, see finite.hpp; a per-entry test is avoided
+// because the same pattern measured ~4% slower in the lean refactorization loop).
+static constexpr double NONFINITE_NORM = std::numeric_limits<double>::max();
+
+static inline double mismatch_norm(const double* F, int m) {
+    double n = 0.0, sum = 0.0;
+    for (int i = 0; i < m; ++i) {
+        const double a = std::fabs(F[i]);
+        sum += a;
+        n = std::max(n, a);
+    }
+    return p3s_isfinite(sum) ? n : NONFINITE_NORM;
+}
+
 // Mismatch-only infinity norm at a TRIAL voltage (Vm,Va). No Jacobian, one sincos per
 // Ybus nonzero -- the cheapest primitive in the file. Used ONLY by the backtracking line
 // search to score a candidate step.
@@ -398,7 +459,7 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
     const double* Ya = st.Ya.empty() ? w.Ya.data() : st.Ya.data();
     const char* pin = st.pin.empty() ? nullptr : st.pin.data();
     const int npvpq = (int)w.pvpq.size();
-    double nrm = 0.0;
+    double nrm = 0.0, sum = 0.0;   // see mismatch_norm: NaN must not vanish in the max-reduction
     for (int ri = 0; ri < npvpq; ++ri) {
         const int row = w.pvpq[ri];
         if (pin && pin[row]) continue;              // pinned row -> mismatch is 0
@@ -407,7 +468,9 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
             const double delta = Va[row] - Ya[k] - Va[w.Yj[k]];
             p += Vm[row] * Ym[k] * Vm[w.Yj[k]] * std::cos(delta);
         }
-        nrm = std::max(nrm, std::fabs(p - st.Pspec[row]));
+        const double a = std::fabs(p - st.Pspec[row]);
+        sum += a;
+        nrm = std::max(nrm, a);
     }
     for (int ri = 0; ri < (int)w.pq.size(); ++ri) {
         const int row = w.pq[ri];
@@ -417,9 +480,11 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
             const double delta = Va[row] - Ya[k] - Va[w.Yj[k]];
             q += Vm[row] * Ym[k] * Vm[w.Yj[k]] * std::sin(delta);
         }
-        nrm = std::max(nrm, std::fabs(q - st.Qspec[row]));
+        const double a = std::fabs(q - st.Qspec[row]);
+        sum += a;
+        nrm = std::max(nrm, a);
     }
-    return nrm;
+    return p3s_isfinite(sum) ? nrm : NONFINITE_NORM;
 }
 
 // ----------------------------------------------------------------------------
@@ -438,13 +503,49 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
 // ----------------------------------------------------------------------------
 struct NewtonResult { int iterations; bool converged; };
 
+// ----------------------------------------------------------------------------
+// Optional per-phase profiling of the Newton loop (Step 0 of the vectorization
+// plan, docs/nr_klu_vectorization_plan.md). Build with -DNR_KLU_PROFILE to split
+// run_newton's wall time into eval_F_and_J / KLU (factor+refactor+solve) / line
+// search, which is what decides whether vectorizing eval_F_and_J is worth doing.
+//
+// OFF by default: the production path must not pay for a clock read per phase per
+// iteration, and these macros compile to nothing when NR_KLU_PROFILE is undefined.
+//
+// Caveat: the KLU phase has early `return {it, false}` paths (singular Jacobian, failed
+// solve) between its NRP_T0 and NRP_ACC, so a NON-CONVERGED solve under-reports KLU
+// time by its final partial iteration. Converged solves -- the only ones worth timing --
+// are unaffected. Check `converged` before reading these numbers.
+// ----------------------------------------------------------------------------
+struct NewtonProfile {
+    double t_eval_ms = 0.0;   // eval_F_and_J (mismatch + Jacobian assembly)
+    double t_klu_ms  = 0.0;   // klu_factor / klu_refactor / klu_solve
+    double t_ls_ms   = 0.0;   // line-search trials (form_trial + eval_F_norm)
+    int    n_eval = 0, n_klu = 0, n_ls = 0;   // call counts
+};
+
+#ifdef NR_KLU_PROFILE
+// thread_local so a threaded batch accumulates per worker without a race; solve_single
+// (single-threaded) just reads it back after the solve.
+static thread_local NewtonProfile g_prof;
+  #define NRP_CLOCK()      std::chrono::high_resolution_clock::now()
+  #define NRP_T0(var)      auto var = NRP_CLOCK()
+  #define NRP_ACC(var, field, cnt) \
+      do { g_prof.field += std::chrono::duration<double, std::milli>(NRP_CLOCK() - var).count(); \
+           g_prof.cnt += 1; } while (0)
+#else
+  #define NRP_T0(var)      ((void)0)
+  #define NRP_ACC(var, field, cnt) ((void)0)
+#endif
+
 // Backtracking line-search parameters (compile-time; not exposed to Python).
 //
-// A full (alpha=1) step is ALWAYS tried first. It is accepted whenever it satisfies the
-// Armijo SUFFICIENT-DECREASE test (below) -- true for good full steps -- so on well-
-// behaved grids the search never backtracks and the only cost is one mismatch-norm
-// evaluation per iteration, REUSED as the next iteration's convergence check (net zero
-// extra work). Backtracking only engages when the full step overshoots.
+// A full (alpha=1) step is ALWAYS tried first, scored with eval_F_and_J itself: the F and
+// J it builds at the full-step point are exactly what the next iteration needs, so an
+// accepted full step -- true for good full steps -- costs nothing beyond the one
+// eval_F_and_J an iteration needs anyway. Backtracking only engages when the full step
+// overshoots; its trials use the cheaper eval_F_norm, and eval_F_and_J is then re-run
+// at the accepted point.
 //
 // Acceptance is Armijo, not plain "any decrease": accept alpha iff
 //     ||F(V + alpha*dV)||  <=  (1 - ARMIJO_C * alpha) * ||F(V)|| .
@@ -461,6 +562,10 @@ static constexpr double LS_BETA       = 0.5;   // step reduction factor per back
 static constexpr int    LS_MAX_TRIALS = 10;    // max backtracks (alpha down to ~1/1024)
 static constexpr double ARMIJO_C      = 1e-4;  // sufficient-decrease constant
 
+// Pivot-reuse guard: an inherited pivot order is accepted while its klu_rcond stays
+// within this factor of the rcond of the state's last fresh klu_factor (SolveState).
+static constexpr double REUSE_RCOND_RATIO = 1e-3;
+
 static NewtonResult run_newton(const Topology& topo, SolveState& st,
                                int max_iter, double tol, bool line_search = true) {
     const int npvpq = (int)topo.pvpq.size();
@@ -475,13 +580,18 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
     // Current mismatch norm. eval_F_and_J fills F and the Jacobian at (Vm,Va); we track the
     // infinity-norm of F alongside so the line search can compare against it. After a step,
     // the accepted trial's norm becomes this value for the next iteration (fast-path reuse).
+    NRP_T0(tp_e0);
     eval_F_and_J(topo, st, Vm, Va, st.Pspec.data(), st.Qspec.data(), F);
-    double nrm = 0; for (int i = 0; i < topo.m; ++i) nrm = std::max(nrm, std::fabs(F[i]));
+    NRP_ACC(tp_e0, t_eval_ms, n_eval);
+    double nrm = mismatch_norm(F, topo.m);
 
     int it = 0;
     bool converged = false;
     while (it < max_iter) {
         if (nrm < tol) { converged = true; break; }
+        // Non-finite mismatch (NaN/Inf voltages or admittances): Newton cannot recover from
+        // it, and factoring a NaN Jacobian is wasted work -- stop, not converged.
+        if (nrm >= NONFINITE_NORM) break;
         ++it;
 
         // KLU factor (first time this state factors) or cheap refactor (pattern fixed).
@@ -492,69 +602,130 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
         // "did not converge" outcome for THIS operating point, not a fatal error, so we
         // return non-converged rather than throwing -- which would abort an entire batch
         // for one bad contingency.
-        if (!st.factored) {
-            st.Numeric = klu_factor(const_cast<int*>(topo.Jp.data()),
-                                    const_cast<int*>(topo.Ji.data()),
-                                    st.Jx.data(), topo.Symbolic, &st.Common);
-            if (!st.Numeric) return {it, false};
-            st.factored = true;
-        } else {
+        NRP_T0(tp_k0);
+        // Lean path: refactor on the topology's frozen pivot order (lean_lu.hpp) and solve.
+        // Rejected if its pivot ratio falls REUSE_RCOND_RATIO below the plan's own; KLU
+        // then takes over for the rest of this solve, starting with a fresh pivoting factor.
+        bool lean_done = false;
+        if (st.use_lean && topo.lean.valid) {
+            const double rc = lean_refactor(topo.lean, st.Jx.data(), st.LU.data(), st.lu_x.data());
+            if (rc >= REUSE_RCOND_RATIO * topo.lean.rcond0) {
+                for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
+                lean_solve(topo.lean, st.LU.data(), rhs, st.lu_y.data());
+                lean_done = true;
+            } else {
+                st.use_lean = false;
+                st.drop_numeric();
+            }
+        }
+        bool need_factor = !lean_done && !st.factored;
+        if (!lean_done && !need_factor) {
             int ok = klu_refactor(const_cast<int*>(topo.Jp.data()),
                                   const_cast<int*>(topo.Ji.data()),
                                   st.Jx.data(), topo.Symbolic, st.Numeric, &st.Common);
+            if (ok && st.check_reuse) {
+                // First refactor on a pivot order inherited from another column: reject
+                // it if it is much less well-conditioned than a fresh factor was.
+                st.check_reuse = false;
+                ok = klu_rcond(topo.Symbolic, st.Numeric, &st.Common)
+                     && st.Common.rcond >= REUSE_RCOND_RATIO * st.rcond_fresh;
+            }
             if (!ok) {
                 klu_free_numeric(&st.Numeric, &st.Common);
-                st.Numeric = klu_factor(const_cast<int*>(topo.Jp.data()),
-                                        const_cast<int*>(topo.Ji.data()),
-                                        st.Jx.data(), topo.Symbolic, &st.Common);
-                if (!st.Numeric) return {it, false};
+                need_factor = true;
             }
         }
+        if (need_factor) {
+            st.Numeric = klu_factor(const_cast<int*>(topo.Jp.data()),
+                                    const_cast<int*>(topo.Ji.data()),
+                                    st.Jx.data(), topo.Symbolic, &st.Common);
+            st.factored = (st.Numeric != nullptr);
+            if (!st.factored) return {it, false};
+            st.check_reuse = false;
+            st.rcond_fresh = klu_rcond(topo.Symbolic, st.Numeric, &st.Common) ? st.Common.rcond : 0.0;
+        }
 
-        for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
-        if (!klu_solve(topo.Symbolic, st.Numeric, topo.m, 1, rhs, &st.Common))
-            return {it, false};
+        if (!lean_done) {
+            for (int i = 0; i < topo.m; ++i) rhs[i] = -F[i];
+            if (!klu_solve(topo.Symbolic, st.Numeric, topo.m, 1, rhs, &st.Common))
+                return {it, false};
+        }
+        NRP_ACC(tp_k0, t_klu_ms, n_klu);
 
         // --- step + guarded Armijo backtracking line search --------------------
-        // Try the full Newton step first. If it passes the Armijo sufficient-decrease test
-        // (the common case near the solution), accept it -- and reuse its norm as the next
-        // iteration's convergence check, so the fast path adds no extra mismatch evals.
-        // Only on overshoot do we backtrack, each trial costing one cheap eval_F_norm
-        // (no Jacobian, no factor, no solve). A helper forms V + alpha*dV into Vm_ls/Va_ls.
+        // Score the full Newton step with eval_F_and_J directly: if it is accepted (always
+        // when line_search is off; on Armijo sufficient decrease otherwise -- the common
+        // case near the solution), the F and J it just built at the new point are the ones
+        // the next iteration needs, so the step costs a single mismatch pass. Only on
+        // overshoot do we backtrack, each trial costing one cheap eval_F_norm (no Jacobian,
+        // no factor, no solve), then rebuild F and J at the accepted point. Overwriting F
+        // and Jx at a rejected point is harmless: backtracking needs only the scalar `nrm`,
+        // the step `rhs` and the committed Vm/Va, and Jx is already factored.
+        // A helper forms V + alpha*dV into Vm_ls/Va_ls.
         auto form_trial = [&](double a) {
             for (int i = 0; i < topo.n; ++i) { Vm_ls[i] = Vm[i]; Va_ls[i] = Va[i]; }
             for (int i = 0; i < npvpq; ++i) Va_ls[topo.pvpq[i]] += a * rhs[i];
             for (int i = 0; i < npq;   ++i) Vm_ls[topo.pq[i]]   += a * rhs[npvpq + i];
         };
 
+        auto commit_trial = [&]() {
+            for (int i = 0; i < npvpq; ++i) Va[topo.pvpq[i]] = Va_ls[topo.pvpq[i]];
+            for (int i = 0; i < npq;   ++i) Vm[topo.pq[i]]   = Vm_ls[topo.pq[i]];
+        };
+        auto f_norm = [&]() { return mismatch_norm(F, topo.m); };
+
+        form_trial(1.0);
+        eval_F_and_J(topo, st, Vm_ls, Va_ls, st.Pspec.data(), st.Qspec.data(), F);
+        const double nrm_full = f_norm();
+        if (!line_search || nrm_full <= (1.0 - ARMIJO_C) * nrm) {
+            commit_trial();
+            nrm = nrm_full;
+            continue;
+        }
+        NRP_ACC(tp_l0, t_ls_ms, n_ls);
+
+        // Full step rejected: backtrack over alpha = LS_BETA, LS_BETA^2, ... (the same
+        // alphas as always tried after alpha=1), keeping the least-bad trial in case none
+        // passes Armijo -- the full step itself is a candidate for that.
         double alpha = 1.0;
-        double nrm_new = nrm;
-        double best_alpha = 1.0, best_nrm = std::numeric_limits<double>::infinity();
-        for (int trial = 0; trial <= (line_search ? LS_MAX_TRIALS : 0); ++trial) {
+        double best_alpha = 1.0, best_nrm = nrm_full;
+        for (int trial = 1; trial <= LS_MAX_TRIALS; ++trial) {
+            alpha *= LS_BETA;
             form_trial(alpha);
-            nrm_new = eval_F_norm(topo, st, Vm_ls, Va_ls);
+            const double nrm_new = eval_F_norm(topo, st, Vm_ls, Va_ls);
             if (nrm_new < best_nrm) { best_nrm = nrm_new; best_alpha = alpha; }
-            // Fast path when disabled: take the single alpha=1 evaluation as-is.
-            // Otherwise accept on Armijo sufficient decrease.
-            if (!line_search || nrm_new <= (1.0 - ARMIJO_C * alpha) * nrm) break;
+            if (nrm_new <= (1.0 - ARMIJO_C * alpha) * nrm) break;
             if (trial == LS_MAX_TRIALS) {
                 // No alpha passed Armijo -> commit the least-bad (smallest-residual) trial.
-                if (best_alpha != alpha) { form_trial(best_alpha); nrm_new = best_nrm; }
+                if (best_alpha != alpha) form_trial(best_alpha);
                 break;
             }
-            alpha *= LS_BETA;
         }
+        commit_trial();
 
-        // commit the accepted trial voltage (currently held in Vm_ls/Va_ls)
-        for (int i = 0; i < npvpq; ++i) Va[topo.pvpq[i]] = Va_ls[topo.pvpq[i]];
-        for (int i = 0; i < npq;   ++i) Vm[topo.pq[i]]   = Vm_ls[topo.pq[i]];
-
-        // Rebuild F and J at the accepted point for the next iteration's solve; the norm
-        // is recomputed here (it equals nrm_new, but eval_F_and_J is needed anyway for J).
+        // Rebuild F and J at the accepted point for the next iteration's solve.
         eval_F_and_J(topo, st, Vm, Va, st.Pspec.data(), st.Qspec.data(), F);
-        nrm = 0; for (int i = 0; i < topo.m; ++i) nrm = std::max(nrm, std::fabs(F[i]));
+        nrm = f_norm();
     }
     return {it, converged};
+}
+
+// Freeze KLU's pivot order and L/U pattern for the lean refactorization (Topology::lean).
+// The pivots are chosen once, on the Jacobian at a flat voltage (|V|=1, angle 0) -- an
+// operating-point-free matrix of the right structure -- so every solve and every thread
+// shares one order, and results do not depend on which thread solved what. Leaves the
+// plan invalid (pure KLU) if anything fails.
+static void build_lean_plan(Topology& topo) {
+    SolveState s(topo);                    // plan not valid yet -> no lean buffers
+    std::fill(s.Vm.begin(), s.Vm.end(), 1.0);
+    eval_F_and_J(topo, s, s.Vm.data(), s.Va.data(), s.Pspec.data(), s.Qspec.data(), s.F.data());
+
+    klu_common c;
+    klu_defaults(&c);
+    klu_numeric* N = klu_factor(topo.Jp.data(), topo.Ji.data(), s.Jx.data(), topo.Symbolic, &c);
+    if (!N) return;
+    lean_build(topo.lean, topo.m, topo.Jp.data(), topo.Ji.data(), topo.Symbolic, N, &c);
+    klu_free_numeric(&N, &c);
 }
 
 // Build the shared Topology (pattern + symbolic analyze) from CSR Ybus + pv/pq.
@@ -584,21 +755,31 @@ static void build_topology(Topology& topo,
     topo.SymCommon.btf = btf;
     topo.Symbolic = klu_analyze(topo.m, topo.Jp.data(), topo.Ji.data(), &topo.SymCommon);
     if (!topo.Symbolic) throw std::runtime_error("klu_analyze failed");
+    build_lean_plan(topo);
 }
 
-// Run `body(t)` for t in [0, T): serially if n_threads<=1 or OpenMP is unavailable,
-// otherwise with an OpenMP parallel-for using min(n_threads, T, hw_concurrency)
-// threads (n_threads==0 means "all hardware threads"). The body must be independent
-// across t (each builds its own SolveState), so the result is order-independent.
+// Worker counts for the batch paths come from OpenMP, never from
+// std::thread::hardware_concurrency(): on Linux (libstdc++/glibc) the latter reports every CPU
+// of the machine and ignores the process CPU mask, so inside a SLURM allocation of 32 CPUs on a
+// 128-CPU node it asked for 128 threads. omp_get_max_threads() honours OMP_NUM_THREADS and the
+// CPU mask; omp_get_num_procs() is the number of CPUs the process may run on.
+#ifdef _OPENMP
+static int default_batch_threads() { return std::max(1, omp_get_max_threads()); }
+static int max_batch_threads() { return std::max(1, omp_get_num_procs()); }
+#endif
+
+// Run `body(t)` for t in [0, T): serially if n_threads==1 or OpenMP is unavailable,
+// otherwise with an OpenMP parallel-for using min(n_threads, T, CPUs available) threads.
+// n_threads<=0 means the OpenMP default (OMP_NUM_THREADS, else every CPU the process may use).
+// The body must be independent across t (each column runs on its thread's own SolveState), so
+// the result is order-independent.
 template <typename Body>
 static void run_batch_loop(Body&& body, int T, int n_threads) {
 #ifdef _OPENMP
-    int hw = (int)std::thread::hardware_concurrency();
-    if (hw <= 0) hw = 1;
-    int nt = (n_threads <= 0) ? hw : n_threads;
-    if (nt > T) nt = T;
-    if (nt > hw) nt = hw;
-    if (nt < 1) nt = 1;
+    int nt = (n_threads <= 0) ? default_batch_threads() : n_threads;
+    nt = std::min(nt, max_batch_threads());
+    nt = std::min(nt, T);
+    nt = std::max(nt, 1);
     if (nt == 1) {
         for (int t = 0; t < T; ++t) body(t);
     } else {
@@ -609,6 +790,70 @@ static void run_batch_loop(Body&& body, int T, int n_threads) {
     (void)n_threads;
     for (int t = 0; t < T; ++t) body(t);
 #endif
+}
+
+// One SolveState per worker thread for the batch paths. Building a fresh SolveState per
+// column made every column pay a full klu_factor (~3.6 refactors on pegase, plus the LU
+// allocation) before it could refactor; with warm starts (~2-3 iterations) that was ~45%
+// of the column. A pooled state keeps its buffers and (KLU fallback) its Numeric; with a
+// valid lean plan no column needs a klu_factor at all (see run_column). Each slot is
+// touched only by its own thread.
+class SolveStatePool {
+public:
+    explicit SolveStatePool(const Topology& topo) : topo_(topo), slots_(max_workers()) {}
+
+    SolveState& local() {
+        const size_t id = worker_id();
+        if (id >= slots_.size())
+            throw std::runtime_error("SolveStatePool: worker id out of range");
+        auto& slot = slots_[id];
+        if (!slot) slot = std::make_unique<SolveState>(topo_);
+        return *slot;
+    }
+
+private:
+    static size_t max_workers() {
+        // Must cover every thread id run_batch_loop can use (<= omp_get_num_procs()). Slots are
+        // created lazily, so oversizing only costs empty pointers.
+        size_t hw = std::max(1u, std::thread::hardware_concurrency());
+#ifdef _OPENMP
+        hw = std::max(hw, (size_t)default_batch_threads());
+        hw = std::max(hw, (size_t)max_batch_threads());
+#endif
+        return hw;
+    }
+    static size_t worker_id() {
+#ifdef _OPENMP
+        return (size_t)omp_get_thread_num();
+#else
+        return 0;
+#endif
+    }
+
+    const Topology& topo_;
+    std::vector<std::unique_ptr<SolveState>> slots_;
+};
+
+// Solve one batch column on a pooled state. `init(s)` loads the column's inputs (Sbus,
+// V0, optional Ybus values / pin mask) into s. The column runs on a pivot order it did
+// not choose itself -- the topology's lean plan, or (KLU fallback) the order the state
+// inherited from its previous column -- and run_newton guards both by pivot ratio. A
+// column that still fails to converge is re-run from scratch on KLU with a fresh,
+// pivoting klu_factor, so a reused pivot order can cost time but never a result the
+// per-column fresh factorization would have produced.
+template <typename Init>
+static NewtonResult run_column(const Topology& topo, SolveState& s, Init&& init,
+                               int max_iter, double tol, bool line_search) {
+    const bool reused = s.factored || topo.lean.valid;
+    init(s);
+    s.use_lean = true;
+    s.check_reuse = s.factored;
+    NewtonResult nr = run_newton(topo, s, max_iter, tol, line_search);
+    if (nr.converged || !reused) return nr;
+    s.drop_numeric();
+    s.use_lean = false;
+    init(s);
+    return run_newton(topo, s, max_iter, tol, line_search);
 }
 
 // ----------------------------------------------------------------------------
@@ -665,6 +910,9 @@ py::dict solve_single(
     for (int i = 0; i < n; ++i) { st.Pspec[i] = Sb(i).real(); st.Qspec[i] = Sb(i).imag(); }
     for (int i = 0; i < n; ++i) { st.Vm[i] = std::abs(V0(i)); st.Va[i] = std::arg(V0(i)); }
 
+#ifdef NR_KLU_PROFILE
+    g_prof = NewtonProfile{};   // reset accumulators for this solve
+#endif
     auto t_nr0 = std::chrono::high_resolution_clock::now();
     NewtonResult nr = run_newton(topo, st, max_iter, tol, line_search);
     auto t_nr1 = std::chrono::high_resolution_clock::now();
@@ -687,6 +935,18 @@ py::dict solve_single(
     res["t_setup_ms"]    = std::chrono::duration<double, std::milli>(t_setup1 - t_setup0).count();
     res["t_solve_ms"]    = std::chrono::duration<double, std::milli>(t_nr1 - t_nr0).count();
     res["t_assemble_ms"] = 0.0;
+#ifdef NR_KLU_PROFILE
+    // Per-phase split of the Newton loop (only present in a -DNR_KLU_PROFILE build).
+    res["t_eval_ms"] = g_prof.t_eval_ms;
+    res["t_klu_ms"]  = g_prof.t_klu_ms;
+    res["t_ls_ms"]   = g_prof.t_ls_ms;
+    res["n_eval"]    = g_prof.n_eval;
+    res["n_klu"]     = g_prof.n_klu;
+    res["n_ls"]      = g_prof.n_ls;
+    res["profiled"]  = true;
+#else
+    res["profiled"]  = false;
+#endif
     return res;
 }
 
@@ -762,6 +1022,7 @@ public:
             st->Pspec[i] = Sb(i).real(); st->Qspec[i] = Sb(i).imag();
             st->Vm[i] = std::abs(V0(i)); st->Va[i] = std::arg(V0(i));
         }
+        st->use_lean = true;
         NewtonResult nr = run_newton(topo, *st, max_iter, tol, line_search);
 
         py::array_t<std::complex<double>> Vout(n);
@@ -780,9 +1041,9 @@ public:
     // or (n,) a single start broadcast to all columns. Each column is an independent
     // Newton solve reusing the shared symbolic factorization.
     //
-    // n_threads: 0 = serial (single-threaded loop); >=1 = OpenMP with that many
-    // threads (capped to T and the hardware concurrency). Results are identical
-    // regardless of thread count (columns are independent).
+    // n_threads: 0 = OpenMP default (OMP_NUM_THREADS, else all CPUs available to the
+    // process); 1 = serial; >1 = that many threads, capped to T and to the available CPUs.
+    // Results are identical regardless of thread count (columns are independent).
     //
     // Returns { V: (n, T) complex128, iterations: (T,) int32, converged: (T,) bool }.
     py::dict solve_batch(
@@ -852,27 +1113,31 @@ public:
             throw std::runtime_error("solve_batch: V0buf buffer too small");
         // Vout buffer size is guaranteed by py::array_t constructor with correct shape
 
-        // per-column work: build a fresh SolveState (own KLU numeric), solve, store.
+        // per-column work: solve on this thread's pooled SolveState, store.
+        SolveStatePool pool(topo_ref);
         auto do_col = [&](int t) {
             try {
                 // Validate column index
                 if (t < 0 || t >= T)
                     throw std::runtime_error("solve_batch: invalid time-step index " + std::to_string(t));
 
-                SolveState s(topo_ref);
+                SolveState& s = pool.local();
                 const std::complex<double>* Sc = Sptr + (size_t)t * n;
                 const std::complex<double>* V0c = v0_per_col ? (V0ptr + (size_t)t * n) : V0ptr;
-                for (int i = 0; i < n; ++i) {
-                    // Validate voltage values before using
-                    if (!std::isfinite(std::abs(V0c[i])) || !std::isfinite(std::arg(V0c[i])))
-                        throw std::runtime_error("solve_batch: invalid initial voltage at bus " + std::to_string(i) + ", step " + std::to_string(t));
-                    s.Pspec[i] = Sc[i].real(); s.Qspec[i] = Sc[i].imag();
-                    s.Vm[i] = std::abs(V0c[i]); s.Va[i] = std::arg(V0c[i]);
-                    // Ensure valid initial voltage magnitude
-                    if (s.Vm[i] <= 0.0 || s.Vm[i] > 10.0)
-                        throw std::runtime_error("solve_batch: invalid voltage magnitude " + std::to_string(s.Vm[i]) + " at bus " + std::to_string(i));
-                }
-                NewtonResult nr = run_newton(topo_ref, s, max_iter, tol, line_search);
+                auto init = [&](SolveState& cs) {
+                    for (int i = 0; i < n; ++i) {
+                        // Validate voltage values before using
+                        // p3s_isfinite: std::isfinite is folded to true under -ffast-math (finite.hpp).
+                        if (!p3s_isfinite(V0c[i].real()) || !p3s_isfinite(V0c[i].imag()))
+                            throw std::runtime_error("solve_batch: invalid initial voltage at bus " + std::to_string(i) + ", step " + std::to_string(t));
+                        cs.Pspec[i] = Sc[i].real(); cs.Qspec[i] = Sc[i].imag();
+                        cs.Vm[i] = std::abs(V0c[i]); cs.Va[i] = std::arg(V0c[i]);
+                        // Ensure valid initial voltage magnitude
+                        if (cs.Vm[i] <= 0.0 || cs.Vm[i] > 10.0)
+                            throw std::runtime_error("solve_batch: invalid voltage magnitude " + std::to_string(cs.Vm[i]) + " at bus " + std::to_string(i));
+                    }
+                };
+                NewtonResult nr = run_column(topo_ref, s, init, max_iter, tol, line_search);
                 for (int i = 0; i < n; ++i)
                     Vptr[(size_t)i * T + t] = std::polar(s.Vm[i], s.Va[i]); // row-major (n,T)
                 iptr[t] = nr.iterations;
@@ -975,19 +1240,22 @@ public:
         const Topology& topo_ref = topo;
         std::string err;
 
+        SolveStatePool pool(topo_ref);
         auto do_col = [&](int t) {
             try {
-                SolveState s(topo_ref);
-                // per-case Ybus values override the shared topo values
-                s.Ym.assign(Ymptr + (size_t)t * nnzY, Ymptr + (size_t)(t + 1) * nnzY);
-                s.Ya.assign(Yaptr + (size_t)t * nnzY, Yaptr + (size_t)(t + 1) * nnzY);
-                s.pin.assign(pinptr + (size_t)t * n, pinptr + (size_t)(t + 1) * n);
+                SolveState& s = pool.local();
                 const std::complex<double>* V0c = V0ptr + (size_t)t * n;
-                for (int i = 0; i < n; ++i) {
-                    s.Pspec[i] = Sptr[i].real(); s.Qspec[i] = Sptr[i].imag();
-                    s.Vm[i] = std::abs(V0c[i]); s.Va[i] = std::arg(V0c[i]);
-                }
-                NewtonResult nr = run_newton(topo_ref, s, max_iter, tol, line_search);
+                auto init = [&](SolveState& cs) {
+                    // per-case Ybus values override the shared topo values
+                    cs.Ym.assign(Ymptr + (size_t)t * nnzY, Ymptr + (size_t)(t + 1) * nnzY);
+                    cs.Ya.assign(Yaptr + (size_t)t * nnzY, Yaptr + (size_t)(t + 1) * nnzY);
+                    cs.pin.assign(pinptr + (size_t)t * n, pinptr + (size_t)(t + 1) * n);
+                    for (int i = 0; i < n; ++i) {
+                        cs.Pspec[i] = Sptr[i].real(); cs.Qspec[i] = Sptr[i].imag();
+                        cs.Vm[i] = std::abs(V0c[i]); cs.Va[i] = std::arg(V0c[i]);
+                    }
+                };
+                NewtonResult nr = run_column(topo_ref, s, init, max_iter, tol, line_search);
                 for (int i = 0; i < n; ++i)
                     Vptr[(size_t)i * L + t] = std::polar(s.Vm[i], s.Va[i]);
                 iptr[t] = nr.iterations;
@@ -1035,6 +1303,10 @@ public:
         py::dict r; r["Jp"] = Jp; r["Ji"] = Ji; r["Jx"] = Jx; r["m"] = topo.m; return r;
     }
 
+    // True when solves refactor on the lean static-pivot plan (lean_lu.hpp) rather than
+    // klu_refactor.
+    bool lean_active() const { return topo.lean.valid; }
+
 private:
     Topology topo;                       // shared, read-only during solves
     std::unique_ptr<SolveState> st;      // persistent state for sequential solve()
@@ -1073,6 +1345,8 @@ PYBIND11_MODULE(nr_klu, m) {
              py::arg("ordering") = 0, py::arg("btf") = 0)
         .def("update_Y", &Solver::update_Y, py::arg("Yx"),
              "Refresh Ybus values without redoing the symbolic analyze.")
+        .def_property_readonly("lean_active", &Solver::lean_active,
+             "True when refactorization uses the lean static-pivot kernel (KLU is fallback).")
         .def("solve", &Solver::solve,
              py::arg("Sbus"), py::arg("V0"), py::arg("max_iter") = 30, py::arg("tol") = 1e-8,
              py::arg("line_search") = true)
@@ -1080,7 +1354,8 @@ PYBIND11_MODULE(nr_klu, m) {
              py::arg("Sbus"), py::arg("V0"), py::arg("max_iter") = 30, py::arg("tol") = 1e-8,
              py::arg("n_threads") = 0, py::arg("line_search") = true,
              "Solve a batch of operating points (columns of Sbus, shape (n,T)) sharing "
-             "this topology. n_threads: 0=all cores (OpenMP), 1=serial. line_search: "
+             "this topology. n_threads: 0=OpenMP default (OMP_NUM_THREADS, else all CPUs available "
+             "to the process), 1=serial. line_search: "
              "backtracking damped Newton (default on), pass False to disable. Returns dict "
              "with V (n,T), iterations (T,), converged (T,).")
         .def("solve_batch_contingency", &Solver::solve_batch_contingency,

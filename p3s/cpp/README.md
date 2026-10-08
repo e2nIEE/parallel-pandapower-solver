@@ -29,10 +29,16 @@ level up into the `p3s` package so it imports as `from p3s import nr_klu`.
 - **Constant sparsity pattern.** The Jacobian structure does not change across NR
   iterations, so the CSR pattern is built **once**; the linear solver does its symbolic
   analyze once and only re-numbers values afterwards.
-- **KLU linear solve** (SuiteSparse): `klu_analyze` once, `klu_factor` on iteration 1,
-  then the much cheaper `klu_refactor` on every later iteration (reuses the pivot
-  ordering). Tuned with `btf=0` (a connected PF grid is one irreducible block, so BTF
-  only adds cost) and AMD ordering (denser, slower with COLAMD).
+- **KLU ordering + lean refactorization**: `klu_analyze` once (AMD, `btf=0` -- a
+  connected PF grid is one irreducible block, so BTF only adds cost; COLAMD gives a
+  denser factor). When the `Solver` is built, one `klu_factor` of the flat-start Jacobian
+  fixes the pivot order and L/U pattern, and every Newton iteration then refactors on it
+  with the static-pivot column kernel in `lean_lu.hpp` -- the same algorithm as
+  `klu_refactor` without KLU's packed storage and per-call permutation/scaling overhead,
+  ~1.35-1.5x faster on pegase. KLU stays the fallback: an iteration whose pivot ratio
+  falls 1000x below the plan's switches that solve to `klu_factor`/`klu_refactor`
+  (`Solver.lean_active` reports whether the plan is in use). Building the plan costs
+  about one extra factorization (~11 ms on pegase9241), paid once per `Solver`.
 
 The Jacobian layout (unknowns `x = [Δθ(pvpq); ΔVm(pq)]`):
 
@@ -62,7 +68,8 @@ rb = s.solve_batch(Sbus_mat, V0, max_iter=30, tol=1e-8, n_threads=0)
 Vb = rb["V"]  # complex128 (n, T)
 iters = rb["iterations"]  # int32  (T,)
 converged = rb["converged"]  # bool   (T,)
-# n_threads: 0 = all CPU cores (OpenMP), 1 = serial. Results are thread-invariant.
+# n_threads: 0 = OpenMP default (OMP_NUM_THREADS, else all CPUs available to the process),
+# 1 = serial. Results are thread-invariant.
 
 # --- stateless one-shot (analyze + factor every call) ---
 r = nr_klu.solve_single(Yp, Yj, Yx, Sbus, V0, pv, pq, max_iter=30, tol=1e-8, ordering=0, btf=0)
@@ -75,14 +82,28 @@ Newton cannot share a single factorization across operating points the way SAM d
 (KLU is single-matrix / single-RHS), so the batch speedup comes from (a) amortizing the
 one-time `klu_analyze`, (b) the cheap `klu_refactor` reuse, and (c) **solving independent
 time steps in parallel across CPU cores via OpenMP**. Internally one read-only `Topology`
-(CSR pattern + symbolic factorization) is shared; each worker owns a `SolveState` (its own
-`klu_numeric` + scratch). The Python driver
+(CSR pattern, symbolic factorization and the lean refactorization plan) is shared; each
+worker owns a `SolveState` (LU values, KLU fallback numeric, scratch) that persists across
+that worker's columns, so no column pays a fresh `klu_factor` and every thread refactors on
+the same pivot order (results are thread-invariant). A column that fails to converge is
+re-run from scratch on KLU with a fresh, pivoting factorization. On pegase the per-thread
+reuse is ~1.5× per warm-started column over a fresh factorization per column, and the lean
+kernel a further ~1.15× (1 thread) to ~1.3× (8 threads). The Python driver
 `p3s.NewtonPowerflowCpp.calculate_timeseries_cpp(net, timeseries, n_threads=0)` wraps
 this, reusing the shared Sbus/DC-init helpers in `p3s/timeseries.py` (same convention
 as the GPU `calculate_timeseries_cuda`).
 
 On case9241pegase the batch is **~85–93× faster than a scipy Newton loop**, with ~4.4×
 of that from OpenMP threading (1→8 cores; sub-linear beyond, memory-bandwidth bound).
+
+**Threads on clusters.** `n_threads=0` uses OpenMP's default: `OMP_NUM_THREADS` if set,
+otherwise every CPU the process may run on. That respects `taskset` and SLURM CPU
+allocations (`std::thread::hardware_concurrency()`, used before, reported every CPU of the
+node and oversubscribed the allocation). Explicit counts are capped at the available CPUs.
+Do **not** export `OMP_PROC_BIND` / `OMP_PLACES` for Python processes that also run other
+multi-threaded libraries: the OpenMP runtime pins the importing (main) thread to one place
+when it starts, and every thread created from it later -- e.g. lightsim2grid's
+`InjectionSweep` workers -- inherits that single core.
 
 **Inputs** (all 0-based, `Ybus` in CSR):
 - `Yp` (`int32`, `n+1`), `Yj` (`int32`, `nnz`), `Yx` (`complex128`, `nnz`) — CSR `Ybus`.
@@ -102,7 +123,7 @@ a `Solver` per topology and invalidates it when the `Ybus` structure changes.
 |------|---------|
 | `nr_klu.cpp` | The solver (pybind module: `Solver` with `solve`/`solve_batch`, `solve_single`, `debug_J`). |
 | `test_batch.py` | Validates `solve_batch` vs scipy + thread-invariance on the `case*.npz` fixtures. |
-| `CMakeLists.txt` | Portable CMake build (pybind11 + KLU + optional OpenMP); used by `pip install p3s[cpp]`. |
+| `CMakeLists.txt` | Portable CMake build (pybind11 + KLU + optional OpenMP); used by `pip install parallel-pandapower-solver[cpp]`. |
 | `pyproject.toml` | scikit-build-core definition for the `p3s-cpp` distribution. |
 | `cmake/FindKLU.cmake` | KLU locator fallback for installs without a CMake config package. |
 | `test_integration.py` | `NewtonPowerflowCpp.calculate` vs pandapower `runpp` (vm/va error + timing). |
@@ -127,13 +148,13 @@ juggling.
 ### Install
 ```bash
 # opt-in extra of the main package (pulls in the p3s-cpp distribution)
-pip install p3s[cpp]
+pip install parallel-pandapower-solver[cpp]
 
 # from a source checkout, build this sub-package directly:
 pip install ./p3s/cpp
 
 # local dev build tuned for the host CPU (-march=native):
-pip install ./p3s/cpp --config-settings=cmake.define.p3s_CPP_NATIVE=ON
+pip install ./p3s/cpp --config-settings=cmake.define.P3S_CPP_NATIVE=ON
 ```
 
 Windows notes:

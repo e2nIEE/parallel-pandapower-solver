@@ -4,7 +4,7 @@
 
 # Build definition for the compiled C++ power-flow extension, shipped as a SEPARATE
 # distribution `p3s-cpp` so the base `p3s` install stays pure-Python. Users
-# opt in with `pip install p3s[cpp]`, which pulls this in and compiles `nr_klu`
+# opt in with `pip install parallel-pandapower-solver[cpp]`, which pulls this in and compiles `nr_klu`
 # (KLU-backed Newton-Raphson) into the p3s package via CMake / scikit-build-core.
 #
 # Build it directly with:  pip install ./p3s/cpp
@@ -19,7 +19,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "p3s-cpp"
-version = "1.0.1"
+version = "1.2.0"
 description = "Compiled C++/KLU Newton-Raphson power-flow extension for p3s (nr_klu)"
 readme = "README.md"
 authors = [
@@ -42,5 +42,8 @@ cmake.version = ">=3.18"
 cmake.build-type = "Release"
 # Don't tune for the build host when producing a wheel (keep it portable); a local
 # `pip install ./p3s/cpp` can re-enable it with
-#   --config-settings=cmake.define.p3s_CPP_NATIVE=ON
-cmake.define.p3s_CPP_NATIVE = "OFF"
+#   --config-settings=cmake.define.P3S_CPP_NATIVE=ON
+# The name must match the CMake option exactly: CMake variables are case-sensitive, and an
+# earlier lowercase spelling here was silently ignored, so wheels were built with
+# -march=native / /arch:AVX2 after all (risking illegal-instruction crashes on older CPUs).
+cmake.define.P3S_CPP_NATIVE = "OFF"

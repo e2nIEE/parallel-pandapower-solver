@@ -6,7 +6,7 @@ SPDX-License-Identifier: BSD-3-Clause
 
 # p3s - parallel pandapower solver
 
-[![PyPI version](https://img.shields.io/pypi/v/parallel-pandapower-solver.svg)](https://pypi.org/project/parallel-pandapower-solver/)
+[![PyPI version](https://img.shields.io/pypi/v/parallel-pandapower-solver)](https://pypi.org/project/parallel-pandapower-solver/)
 [![Documentation Status](https://readthedocs.org/projects/parallel-pandapower-solver/badge/?version=latest)](https://parallel-pandapower-solver.readthedocs.io/en/latest/?version=latest)
 [![REUSE status](https://api.reuse.software/badge/github.com/e2nIEE/parallel-pandapower-solver)](https://api.reuse.software/info/github.com/e2nIEE/parallel-pandapower-solver)
 
@@ -51,7 +51,7 @@ Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because 
 Installs the separate `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s package so `from p3s import nr_klu` works.
 
 ```bash
-pip install p3s[cpp]              # from an index (published p3s-cpp)
+pip install parallel-pandapower-solver[cpp]              # from an index (published p3s-cpp)
 pip install .[cpp]                # from a checkout (see note below)
 ```
 

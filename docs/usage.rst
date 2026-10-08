@@ -77,7 +77,7 @@ toolkit):
 
 .. code-block:: bash
 
-    pip install p3s[cpp]     # from an index
+    pip install parallel-pandapower-solver[cpp]     # from an index
     pip install ./p3s/cpp    # from a source checkout
 
 
