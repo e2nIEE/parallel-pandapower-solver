@@ -2,12 +2,27 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import subprocess
+import sys
 from typing import Any
 
 from numpy import abs, argwhere, dtype, isclose, ndarray, nonzero, signedinteger
 from numpy import typing as npt
 from pandapower import pandapowerNet
 from pandapower.control import ConstControl
+
+
+def runs_cleanly(script: str, *args: str, timeout: float = 300) -> bool:
+    """Run ``script`` in a fresh Python process and report whether it exited with 0.
+
+    Used to probe native GPU code paths that may segfault (e.g. cusolverRf on CUDA
+    12.4+): a segfault cannot be caught in-process and would kill the pytest session.
+    """
+    try:
+        proc = subprocess.run([sys.executable, "-c", script, *args], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False
+    return proc.returncode == 0
 
 
 def differing_entries(a: ndarray, b: ndarray, rtol=1e-05, atol=1e-08):
