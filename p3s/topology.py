@@ -226,12 +226,14 @@ def switch_currents(topo: Topology, i_into_switches: NDArray) -> tuple[NDArray, 
     buses = np.unique(np.r_[topo.bb_from, topo.bb_to])
     pos = np.full(len(topo.node_of_bus), -1)
     pos[buses] = np.arange(len(buses))
+    
     # incidence: +1 at the switch's bus (current leaves), -1 at its element bus (current arrives)
     rows = np.r_[pos[topo.bb_from], pos[topo.bb_to]]
     cols = np.r_[np.arange(n_sw), np.arange(n_sw)]
     a = sp.csr_matrix((np.r_[np.ones(n_sw), -np.ones(n_sw)], (rows, cols)), shape=(len(buses), n_sw))
     w = sp.diags(topo.bb_weight)
     laplacian = (a @ w @ a.T).tocsr()
+
     # ground the first bus of every group (the Laplacian of each group is singular by one)
     _, comp = connected_components(laplacian, directed=False)
     grounded: NDArray = np.zeros(len(buses), dtype=bool)

@@ -45,6 +45,7 @@ extern "C" {
 #include <klu.h>
 }
 #include "lean_lu.hpp"
+#include "finite.hpp"
 
 namespace py = pybind11;
 using cd = std::complex<double>;
@@ -422,6 +423,26 @@ static void eval_F_and_J(const Topology& w, SolveState& st, const double* Vm, co
     }
 }
 
+// Mismatch infinity-norm that cannot mistake NaN for convergence. std::max(n, NaN) returns n,
+// so a plain max-reduction silently drops NaN entries: a NaN mismatch (NaN admittance, a step
+// that blew up) scored as 0 and the solve reported "converged" with NaN voltages. Any
+// non-finite entry yields NONFINITE_NORM instead -- a finite sentinel rather than +inf, so the
+// Armijo test `new <= (1 - c*alpha) * old` stays false between two non-finite norms. NaN/Inf
+// entries propagate into a running sum, so one p3s_isfinite test after the loop detects them
+// (std::isfinite is folded away under -ffast-math, see finite.hpp; a per-entry test is avoided
+// because the same pattern measured ~4% slower in the lean refactorization loop).
+static constexpr double NONFINITE_NORM = std::numeric_limits<double>::max();
+
+static inline double mismatch_norm(const double* F, int m) {
+    double n = 0.0, sum = 0.0;
+    for (int i = 0; i < m; ++i) {
+        const double a = std::fabs(F[i]);
+        sum += a;
+        n = std::max(n, a);
+    }
+    return p3s_isfinite(sum) ? n : NONFINITE_NORM;
+}
+
 // Mismatch-only infinity norm at a TRIAL voltage (Vm,Va). No Jacobian, one sincos per
 // Ybus nonzero -- the cheapest primitive in the file. Used ONLY by the backtracking line
 // search to score a candidate step.
@@ -438,7 +459,7 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
     const double* Ya = st.Ya.empty() ? w.Ya.data() : st.Ya.data();
     const char* pin = st.pin.empty() ? nullptr : st.pin.data();
     const int npvpq = (int)w.pvpq.size();
-    double nrm = 0.0;
+    double nrm = 0.0, sum = 0.0;   // see mismatch_norm: NaN must not vanish in the max-reduction
     for (int ri = 0; ri < npvpq; ++ri) {
         const int row = w.pvpq[ri];
         if (pin && pin[row]) continue;              // pinned row -> mismatch is 0
@@ -447,7 +468,9 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
             const double delta = Va[row] - Ya[k] - Va[w.Yj[k]];
             p += Vm[row] * Ym[k] * Vm[w.Yj[k]] * std::cos(delta);
         }
-        nrm = std::max(nrm, std::fabs(p - st.Pspec[row]));
+        const double a = std::fabs(p - st.Pspec[row]);
+        sum += a;
+        nrm = std::max(nrm, a);
     }
     for (int ri = 0; ri < (int)w.pq.size(); ++ri) {
         const int row = w.pq[ri];
@@ -457,9 +480,11 @@ static double eval_F_norm(const Topology& w, const SolveState& st,
             const double delta = Va[row] - Ya[k] - Va[w.Yj[k]];
             q += Vm[row] * Ym[k] * Vm[w.Yj[k]] * std::sin(delta);
         }
-        nrm = std::max(nrm, std::fabs(q - st.Qspec[row]));
+        const double a = std::fabs(q - st.Qspec[row]);
+        sum += a;
+        nrm = std::max(nrm, a);
     }
-    return nrm;
+    return p3s_isfinite(sum) ? nrm : NONFINITE_NORM;
 }
 
 // ----------------------------------------------------------------------------
@@ -558,12 +583,15 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
     NRP_T0(tp_e0);
     eval_F_and_J(topo, st, Vm, Va, st.Pspec.data(), st.Qspec.data(), F);
     NRP_ACC(tp_e0, t_eval_ms, n_eval);
-    double nrm = 0; for (int i = 0; i < topo.m; ++i) nrm = std::max(nrm, std::fabs(F[i]));
+    double nrm = mismatch_norm(F, topo.m);
 
     int it = 0;
     bool converged = false;
     while (it < max_iter) {
         if (nrm < tol) { converged = true; break; }
+        // Non-finite mismatch (NaN/Inf voltages or admittances): Newton cannot recover from
+        // it, and factoring a NaN Jacobian is wasted work -- stop, not converged.
+        if (nrm >= NONFINITE_NORM) break;
         ++it;
 
         // KLU factor (first time this state factors) or cheap refactor (pattern fixed).
@@ -644,10 +672,7 @@ static NewtonResult run_newton(const Topology& topo, SolveState& st,
             for (int i = 0; i < npvpq; ++i) Va[topo.pvpq[i]] = Va_ls[topo.pvpq[i]];
             for (int i = 0; i < npq;   ++i) Vm[topo.pq[i]]   = Vm_ls[topo.pq[i]];
         };
-        auto f_norm = [&]() {
-            double n = 0; for (int i = 0; i < topo.m; ++i) n = std::max(n, std::fabs(F[i]));
-            return n;
-        };
+        auto f_norm = [&]() { return mismatch_norm(F, topo.m); };
 
         form_trial(1.0);
         eval_F_and_J(topo, st, Vm_ls, Va_ls, st.Pspec.data(), st.Qspec.data(), F);
@@ -733,19 +758,28 @@ static void build_topology(Topology& topo,
     build_lean_plan(topo);
 }
 
-// Run `body(t)` for t in [0, T): serially if n_threads<=1 or OpenMP is unavailable,
-// otherwise with an OpenMP parallel-for using min(n_threads, T, hw_concurrency)
-// threads (n_threads==0 means "all hardware threads"). The body must be independent
-// across t (each builds its own SolveState), so the result is order-independent.
+// Worker counts for the batch paths come from OpenMP, never from
+// std::thread::hardware_concurrency(): on Linux (libstdc++/glibc) the latter reports every CPU
+// of the machine and ignores the process CPU mask, so inside a SLURM allocation of 32 CPUs on a
+// 128-CPU node it asked for 128 threads. omp_get_max_threads() honours OMP_NUM_THREADS and the
+// CPU mask; omp_get_num_procs() is the number of CPUs the process may run on.
+#ifdef _OPENMP
+static int default_batch_threads() { return std::max(1, omp_get_max_threads()); }
+static int max_batch_threads() { return std::max(1, omp_get_num_procs()); }
+#endif
+
+// Run `body(t)` for t in [0, T): serially if n_threads==1 or OpenMP is unavailable,
+// otherwise with an OpenMP parallel-for using min(n_threads, T, CPUs available) threads.
+// n_threads<=0 means the OpenMP default (OMP_NUM_THREADS, else every CPU the process may use).
+// The body must be independent across t (each column runs on its thread's own SolveState), so
+// the result is order-independent.
 template <typename Body>
 static void run_batch_loop(Body&& body, int T, int n_threads) {
 #ifdef _OPENMP
-    int hw = (int)std::thread::hardware_concurrency();
-    if (hw <= 0) hw = 1;
-    int nt = (n_threads <= 0) ? hw : n_threads;
-    if (nt > T) nt = T;
-    if (nt > hw) nt = hw;
-    if (nt < 1) nt = 1;
+    int nt = (n_threads <= 0) ? default_batch_threads() : n_threads;
+    nt = std::min(nt, max_batch_threads());
+    nt = std::min(nt, T);
+    nt = std::max(nt, 1);
     if (nt == 1) {
         for (int t = 0; t < T; ++t) body(t);
     } else {
@@ -779,9 +813,12 @@ public:
 
 private:
     static size_t max_workers() {
+        // Must cover every thread id run_batch_loop can use (<= omp_get_num_procs()). Slots are
+        // created lazily, so oversizing only costs empty pointers.
         size_t hw = std::max(1u, std::thread::hardware_concurrency());
 #ifdef _OPENMP
-        hw = std::max(hw, (size_t)std::max(1, omp_get_max_threads()));
+        hw = std::max(hw, (size_t)default_batch_threads());
+        hw = std::max(hw, (size_t)max_batch_threads());
 #endif
         return hw;
     }
@@ -1004,9 +1041,9 @@ public:
     // or (n,) a single start broadcast to all columns. Each column is an independent
     // Newton solve reusing the shared symbolic factorization.
     //
-    // n_threads: 0 = serial (single-threaded loop); >=1 = OpenMP with that many
-    // threads (capped to T and the hardware concurrency). Results are identical
-    // regardless of thread count (columns are independent).
+    // n_threads: 0 = OpenMP default (OMP_NUM_THREADS, else all CPUs available to the
+    // process); 1 = serial; >1 = that many threads, capped to T and to the available CPUs.
+    // Results are identical regardless of thread count (columns are independent).
     //
     // Returns { V: (n, T) complex128, iterations: (T,) int32, converged: (T,) bool }.
     py::dict solve_batch(
@@ -1090,7 +1127,8 @@ public:
                 auto init = [&](SolveState& cs) {
                     for (int i = 0; i < n; ++i) {
                         // Validate voltage values before using
-                        if (!std::isfinite(std::abs(V0c[i])) || !std::isfinite(std::arg(V0c[i])))
+                        // p3s_isfinite: std::isfinite is folded to true under -ffast-math (finite.hpp).
+                        if (!p3s_isfinite(V0c[i].real()) || !p3s_isfinite(V0c[i].imag()))
                             throw std::runtime_error("solve_batch: invalid initial voltage at bus " + std::to_string(i) + ", step " + std::to_string(t));
                         cs.Pspec[i] = Sc[i].real(); cs.Qspec[i] = Sc[i].imag();
                         cs.Vm[i] = std::abs(V0c[i]); cs.Va[i] = std::arg(V0c[i]);
@@ -1316,7 +1354,8 @@ PYBIND11_MODULE(nr_klu, m) {
              py::arg("Sbus"), py::arg("V0"), py::arg("max_iter") = 30, py::arg("tol") = 1e-8,
              py::arg("n_threads") = 0, py::arg("line_search") = true,
              "Solve a batch of operating points (columns of Sbus, shape (n,T)) sharing "
-             "this topology. n_threads: 0=all cores (OpenMP), 1=serial. line_search: "
+             "this topology. n_threads: 0=OpenMP default (OMP_NUM_THREADS, else all CPUs available "
+             "to the process), 1=serial. line_search: "
              "backtracking damped Newton (default on), pass False to disable. Returns dict "
              "with V (n,T), iterations (T,), converged (T,).")
         .def("solve_batch_contingency", &Solver::solve_batch_contingency,

@@ -77,9 +77,9 @@ For a local build tuned to your CPU (``-march=native``), re-enable it:
 
 .. code-block:: bash
 
-   pip install ./p3s/cpp --config-settings=cmake.define.p3s_CPP_NATIVE=ON
+   pip install ./p3s/cpp --config-settings=cmake.define.P3S_CPP_NATIVE=ON
 
-``p3s_CPP_NATIVE`` defaults to ``OFF`` in the published wheel; use ``ON`` only for local
+``P3S_CPP_NATIVE`` defaults to ``OFF`` in the published wheel; use ``ON`` only for local
 development builds.
 
 Output
