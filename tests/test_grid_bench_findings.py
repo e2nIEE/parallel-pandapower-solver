@@ -28,6 +28,9 @@ Root causes, and the benchmark cases each one broke:
       shifters lost (cgmes_powerflow, pegase@cimoxide).
 7. Found while writing these tests, hidden on grid-bench behind 6b: the trafo3w Ybus
    stamp itself does not match pandapower (and is NaN without magnetising branch).
+8. The trafo3w DC phase-shift injection dropped the star-node elimination for windings whose
+   susceptances sum to a negative value (a ``b_sum > 0`` guard), so the DC init was inconsistent
+   with the B-matrix and the Newton solve diverged on a large net.
 
 The tests for 1-6 were checked to be passable: with the matching workaround applied to
 the net (drop oos gens, slack gen -> ext_grid, fuse/drop switched buses, re-express the
@@ -611,7 +614,12 @@ def test_symmetrical_tap_changer_powerflow():
 
 
 def _net_trafo3w(
-    pfe_kw: float = 25.0, i0_percent: float = 0.06, net_sn_mva: float = 1.0, vn=(110.0, 20.0, 10.0), **extra
+    pfe_kw: float = 25.0,
+    i0_percent: float = 0.06,
+    net_sn_mva: float = 1.0,
+    vn=(110.0, 20.0, 10.0),
+    vk=(12.0, 10.0, 8.0),
+    **extra,
 ) -> pandapowerNet:
     net = create_empty_network(sn_mva=net_sn_mva)
     hv = create_bus(net, vn_kv=110.0)
@@ -629,9 +637,9 @@ def _net_trafo3w(
         sn_hv_mva=40.0,
         sn_mv_mva=25.0,
         sn_lv_mva=15.0,
-        vk_hv_percent=12.0,
-        vk_mv_percent=10.0,
-        vk_lv_percent=8.0,
+        vk_hv_percent=vk[0],
+        vk_mv_percent=vk[1],
+        vk_lv_percent=vk[2],
         vkr_hv_percent=0.4,
         vkr_mv_percent=0.35,
         vkr_lv_percent=0.3,
@@ -689,6 +697,11 @@ T3_TAP = dict(tap_neutral=0, tap_min=-8, tap_max=8, tap_step_percent=1.5, tap_ch
 T3_STAR = dict(tap_at_star_point=True, tap_step_degree=0.0, **T3_TAP)
 TRAFO3W_CASES = {
     "plain": {},
+    # vk_hl > vk_hm + vk_ml makes the equivalent mv winding reactance (and thus the winding
+    # susceptance sum b_sum) negative. The DC phase-shift injection must star-eliminate with the
+    # same b_sum sign as the B-matrix; a `b_sum > 0` guard silently dropped the correction and
+    # made the DC init inconsistent, diverging on a large grid (grid-bench / demo net).
+    "neg_b_sum": dict(vk=(40.0, 8.0, 8.0), shift_mv_degree=150.0, shift_lv_degree=330.0),
     "net_sn_100": dict(net_sn_mva=100.0),
     "off_nominal": dict(vn=(115.0, 21.0, 10.5)),
     "shifts": dict(shift_mv_degree=150.0, shift_lv_degree=330.0),
