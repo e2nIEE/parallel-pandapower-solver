@@ -204,7 +204,7 @@ class ThreeWindingTransformerModel(ThreePort):
         b = np.where(connected, self._dc_b, 0.0)
         b_sum = b.sum(axis=1)
         with np.errstate(divide="ignore", invalid="ignore"):
-            share = np.where(b_sum[:, None] > 0, b / b_sum[:, None], 0.0)
+            share = np.where(b_sum[:, None] != 0, b / b_sum[:, None], 0.0)
         p_shift_inj = b * self._dc_delta - share * np.sum(b * self._dc_delta, axis=1)[:, None]
         p_shift_inj += share * self._p_star[:, None]
         p_shift_inj[~self.in_service] = 0.0

@@ -124,7 +124,7 @@ class NewtonPowerflow:
             Ybus_col.extend(Ybus_wards.col)
 
         if "shunt" in net and len(net.shunt) > 0:
-            shunts = ShuntModel(net.shunt, sn_mva=net.sn_mva)
+            shunts = ShuntModel(net.shunt, net.bus, sn_mva=net.sn_mva)
             self._ybus_elements["shunt"] = shunts
             Ybus_shunts = shunts.create_y_matrix(n_bus=n_bus)
             Ybus_dat.extend(Ybus_shunts.data)
