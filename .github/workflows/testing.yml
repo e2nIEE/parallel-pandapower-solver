@@ -9,11 +9,16 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest and newest supported Python (requires-python in pyproject.toml)
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev
       - run: python3 -m pip install ./p3s/cpp
       - run: python3 -m pip install .[test]

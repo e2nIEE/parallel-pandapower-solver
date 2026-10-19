@@ -47,18 +47,19 @@ CPU / GPU based AC/DC Powerflow solver
 
 ## Installation
 
-Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because it needs a C++17 compiler and SuiteSparse/KLU at build time.
-Installs the separate `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s package so `from p3s import nr_klu` works.
+The compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension) is an opt-in extra. It installs the separate
+`p3s-cpp` distribution, which puts `nr_klu` into the p3s package so `from p3s import nr_klu` works. `p3s-cpp` is
+published as precompiled wheels with KLU bundled (Linux x86_64/aarch64, Windows x64, macOS 15+ arm64/x86_64;
+Python 3.11-3.14), so no compiler or SuiteSparse is needed:
 
 ```bash
-pip install parallel-pandapower-solver[cpp]              # from an index (published p3s-cpp)
-pip install .[cpp]                # from a checkout (see note below)
+pip install parallel-pandapower-solver[cpp]
 ```
 
-From a source checkout, p3s-cpp is not on an index, so build it explicitly:
+On other platforms pip builds `p3s-cpp` from source, as does a source checkout:
   pip install ./p3s/cpp
-(SuiteSparse must be available, e.g. `conda install -c conda-forge suitesparse`.)
-(cuda-toolkit[^1] must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
+(This needs a C++17 compiler and SuiteSparse, e.g. `conda install -c conda-forge suitesparse`.)
+(For the CUDA paths, cuda-toolkit[^1] must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
 
 Look into docs/installation.md for more details.
 

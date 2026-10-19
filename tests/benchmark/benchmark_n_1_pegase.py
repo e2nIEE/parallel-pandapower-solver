@@ -49,7 +49,7 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 import numpy as np
 from pandapower.networks import case9241pegase
@@ -58,7 +58,7 @@ from p3s.calculateTrafoTapTable import calculate_trafo_characteristic
 from p3s.contingency.ground_truth import enumerate_contingencies, solve_contingency
 from p3s.contingency.solver_cpp import solve_contingencies_cpp
 
-type methods_type = Literal["cpp", "gpu"]
+methods_type: TypeAlias = Literal["cpp", "gpu"]
 
 
 class MethodResults(TypedDict):

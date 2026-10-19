@@ -7,8 +7,12 @@ Building the C++ Extension
 
 This guide explains how to build the compiled C++ power-flow extension, ``nr_klu``
 (a pybind11 module backed by SuiteSparse/KLU). It is shipped as a **separate
-``p3s-cpp`` distribution** so the base ``p3s`` install stays pure-Python, and it is
-opt-in because building it needs a C++17 compiler and SuiteSparse/KLU.
+``p3s-cpp`` distribution** so the base ``p3s`` install stays pure-Python.
+
+Most users do not need this guide: ``p3s-cpp`` is published as precompiled wheels with
+KLU bundled (see `Release wheels`_), so ``pip install parallel-pandapower-solver[cpp]``
+needs neither a compiler nor SuiteSparse. Building is only needed for development, for a
+host-tuned build, or on platforms without a wheel.
 
 After a successful build, the module is installed **into the ``p3s`` package** by
 CMake, so it resolves without any path juggling:
@@ -39,7 +43,7 @@ Prerequisites
    - A system ``libsuitesparse-dev`` also works on Linux; ``cmake/FindKLU.cmake``
      locates it.
 
-3. **Python >= 3.10**
+3. **Python >= 3.11**
 
 4. **pybind11, numpy and scikit-build-core** are pulled in automatically by the
    build backend — you do not need to install them yourself (see
@@ -60,7 +64,7 @@ From an index
 
 .. code-block:: bash
 
-   pip install parallel-pandapower-solver[cpp]        # pulls in the published p3s-cpp distribution
+   pip install parallel-pandapower-solver[cpp]        # uses a p3s-cpp wheel, or builds its sdist
 
 From a source checkout
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -88,6 +92,39 @@ Output
 The built ``nr_klu`` extension is installed into the ``p3s`` package by the CMake
 ``install(TARGETS ... DESTINATION p3s)`` rule. There is no manual copying: after
 the install, ``from p3s import nr_klu`` just works.
+
+Release wheels
+--------------
+
+The ``wheels`` GitHub Actions workflow (``.github/workflows/wheels.yml``) builds the
+published wheels with `cibuildwheel <https://cibuildwheel.pypa.io>`_ for CPython
+3.11-3.14 on Linux (manylinux, x86_64 and aarch64), Windows (x64) and macOS (arm64 and
+x86_64), plus an sdist. It runs as a build-only check on pull requests that touch
+``p3s/cpp``; started manually from the Actions tab it also uploads to TestPyPI or PyPI.
+
+The per-platform recipe is the ``[tool.cibuildwheel]`` table in ``p3s/cpp/pyproject.toml``:
+
+1. ``ci/build_klu.py`` builds the KLU subset of SuiteSparse (KLU, BTF, AMD, COLAMD,
+   SuiteSparse_config; no BLAS) from a pinned, checksummed release as shared libraries.
+2. ``nr_klu`` is built against it with ``P3S_CPP_NATIVE=OFF`` (portable baseline ISA)
+   and OpenMP (GCC's libgomp, MSVC's vcomp, Homebrew's libomp on macOS).
+3. auditwheel / delocate / delvewheel copy these shared libraries into the wheel. KLU
+   and BTF are LGPL-2.1-or-later and stay separate, replaceable libraries. Their license
+   texts are in the wheel's ``.dist-info/licenses/SuiteSparse``.
+4. ``ci/smoke_test.py`` checks each installed wheel, including that OpenMP was found.
+
+The macOS wheels require at least the runner's macOS version (currently 15), because
+Homebrew's libomp is built for it.
+
+To reproduce a build locally (Linux wheels need Docker):
+
+.. code-block:: bash
+
+   pipx run cibuildwheel --platform linux p3s/cpp
+   pipx run cibuildwheel --only cp313-win_amd64 p3s/cpp   # on Windows; writes to C:\suitesparse-klu
+
+To bump SuiteSparse, update ``SUITESPARSE_VERSION`` and ``SUITESPARSE_SHA256`` in
+``p3s/cpp/ci/build_klu.py``.
 
 Windows / conda notes
 ---------------------

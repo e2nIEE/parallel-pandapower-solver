@@ -129,3 +129,15 @@ endif()
 # nr_klu` resolves with no path juggling. scikit-build-core places it under the wheel
 # root; we target the p3s/ subdirectory.
 install(TARGETS nr_klu LIBRARY DESTINATION p3s RUNTIME DESTINATION p3s)
+
+# Binary wheels bundle the KLU shared libraries (see ci/build_klu.py), so ship their
+# license texts too. build_klu.py leaves them under <prefix>/share/licenses/SuiteSparse;
+# KLU_DIR is <prefix>/lib/cmake/KLU when KLU came from such a prefix. Other installs
+# (conda, distro packages) have no such directory, so this is a no-op there.
+if(DEFINED SKBUILD_METADATA_DIR AND KLU_DIR)
+  get_filename_component(_klu_prefix "${KLU_DIR}/../../.." ABSOLUTE)
+  if(EXISTS "${_klu_prefix}/share/licenses/SuiteSparse/NOTICE.txt")
+    install(DIRECTORY "${_klu_prefix}/share/licenses/SuiteSparse/"
+            DESTINATION "${SKBUILD_METADATA_DIR}/licenses/SuiteSparse")
+  endif()
+endif()
