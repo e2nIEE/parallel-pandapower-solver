@@ -179,3 +179,33 @@ Windows notes:
 | (one-time `Solver` analyze)                | ~6.4 ms | — |
 
 All cases validate to ≤1.4e-11 vs pandapower.
+
+
+## License and SuiteSparse
+
+p3s-cpp is licensed under BSD-3-Clause. The source code in this directory contains
+no SuiteSparse code: `nr_klu.cpp` and `lean_lu.hpp` only include the public KLU
+header (`klu.h`) and call the KLU API. CMake locates an existing SuiteSparse
+installation at build time (see *Building* above).
+
+SuiteSparse is used only as a library in the compiled wheels published on PyPI.
+To make `pip install p3s-cpp` work without a separate SuiteSparse installation,
+each wheel bundles these unmodified SuiteSparse shared libraries, dynamically
+linked to `nr_klu`:
+
+| Library            | License           |
+|--------------------|-------------------|
+| KLU                | LGPL-2.1-or-later |
+| BTF                | LGPL-2.1-or-later |
+| AMD                | BSD-3-Clause      |
+| COLAMD             | BSD-3-Clause      |
+| SuiteSparse_config | BSD-3-Clause      |
+
+No other SuiteSparse component is bundled, in particular none of the GPL-licensed
+CHOLMOD modules. The bundled libraries stay under their own licenses, whose full
+texts ship in the wheel's `.dist-info/licenses/` directory. They are separate files
+in the wheel and can be replaced with your own compatible build. The source of the
+exact SuiteSparse version used is attached to each release and available at
+https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/vX.Y.Z.
+
+Building p3s-cpp from source against your own SuiteSparse installation bundles nothing.
