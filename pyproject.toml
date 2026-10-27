@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "parallel-pandapower-solver"
-version = "1.2.1"
+version = "1.2.2"
 description = "CPU / GPU based AC/DC Powerflow solver"
 readme = "README.md"
 authors = [
@@ -28,7 +28,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -44,7 +43,7 @@ dependencies = [
     "intel-cmplr-lib-rt",
     "numba"
 ]
-requires-python = ">= 3.12"
+requires-python = ">= 3.11"
 
 [project.optional-dependencies]
 docs = [
@@ -64,23 +63,22 @@ test = [
     "pandas-stubs", # linting
     "mypy" # linting
 ]
-# Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Opt-in because it
-# needs a C++17 compiler and SuiteSparse/KLU at build time. Installs the separate
-# `p3s-cpp` distribution, whose CMake build drops `nr_klu` into the p3s
-# package so `from p3s import nr_klu` works.
+# Compiled C++/KLU Newton-Raphson solver (the `nr_klu` extension). Installs the separate
+# `p3s-cpp` distribution, which drops `nr_klu` into the p3s package so
+# `from p3s import nr_klu` works. p3s-cpp is published as binary wheels with KLU bundled
+# (.github/workflows/wheels.yml), so on the usual platforms this needs no compiler:
 #
-#   pip install parallel-pandapower-solver[cpp]              # from an index (published p3s-cpp)
-#   pip install .[cpp]                # from a checkout (see note below)
+#   pip install parallel-pandapower-solver[cpp]
 #
-# From a source checkout, p3s-cpp is not on an index, so build it explicitly:
+# Only where no wheel fits does pip build p3s-cpp from its sdist, which needs a C++17
+# compiler and SuiteSparse/KLU (e.g. `conda install -c conda-forge suitesparse`). The same
+# applies to building it from a source checkout:
 #   pip install ./p3s/cpp
-# (SuiteSparse must be available, e.g. `conda install -c conda-forge suitesparse`.)
-# (cuda-toolkit must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
 cpp = [
     "p3s-cpp",
-    "suitesparse",
 ]
 
+# (cuda-toolkit must be available, e.g. `conda install -c nvidia/label/cuda-12.4.0 cuda-toolkit`.)
 cuda = [
     "pycuda"
 ]

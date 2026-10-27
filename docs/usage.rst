@@ -71,13 +71,13 @@ C++ / KLU accelerated solver (:code:`p3s.NewtonPowerflowCpp`)
 =============================================================
 
 A drop-in accelerated variant of the Newton solver that offloads the sparse
-factorisation to the compiled `nr_klu` extension. It is opt-in because building it
-needs a C++17 compiler and SuiteSparse/KLU (and, for the CUDA paths, the CUDA
-toolkit):
+factorisation to the compiled `nr_klu` extension. It is an opt-in extra, published as
+precompiled wheels with KLU bundled; building from a source checkout needs a C++17
+compiler and SuiteSparse/KLU (see :doc:`build`):
 
 .. code-block:: bash
 
-    pip install parallel-pandapower-solver[cpp]     # from an index
+    pip install parallel-pandapower-solver[cpp]     # from an index (precompiled wheel)
     pip install ./p3s/cpp    # from a source checkout
 
 

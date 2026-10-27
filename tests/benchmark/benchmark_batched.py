@@ -26,7 +26,7 @@ import time
 import warnings
 from datetime import datetime
 from functools import partial
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 import numpy as np
 from pandapower import pandapowerNet
@@ -67,7 +67,7 @@ if os.environ.get("P3S_BENCH_CUDA") == "1":
 
 warnings.filterwarnings("ignore", message="Matrix is exactly singular")
 
-type methods_type = Literal["pp", "p3s", "cpp-1thr", "cpp-Nthr", "gpu"]
+methods_type: TypeAlias = Literal["pp", "p3s", "cpp-1thr", "cpp-Nthr", "gpu"]
 ALL_METHODS: list[methods_type] = ["pp", "p3s", "cpp-1thr", "cpp-Nthr", "gpu"]  # removed "sam" for now
 
 
