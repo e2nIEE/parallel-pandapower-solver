@@ -7,14 +7,18 @@
 # opt in with `pip install parallel-pandapower-solver[cpp]`, which pulls this in and compiles `nr_klu`
 # (KLU-backed Newton-Raphson) into the p3s package via CMake / scikit-build-core.
 #
-# Build it directly with:  pip install ./p3s/cpp
+# Released as binary wheels (KLU bundled) built by cibuildwheel, see [tool.cibuildwheel]
+# below and .github/workflows/wheels.yml, so most users never compile it.
+#
+# Build it from source with:  pip install ./p3s/cpp
 # Requires a C++17 compiler and SuiteSparse/KLU (e.g. `conda install -c conda-forge
 # suitesparse`, or system libsuitesparse-dev).
 
 [build-system]
 # numpy is a BUILD requirement (not just runtime): the extension includes
 # pybind11/numpy.h, so the numpy headers must be present in the (isolated) build env.
-requires = ["scikit-build-core>=0.10", "pybind11>=2.12", "numpy>=1.21"]
+# scikit-build-core >= 0.11 for SKBUILD_METADATA_DIR (bundled license files, CMakeLists).
+requires = ["scikit-build-core>=0.11", "pybind11>=2.12", "numpy>=1.21"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -25,14 +29,16 @@ readme = "README.md"
 authors = [
   {name = "Mike Vogt", email = "mike.vogt@iee.fraunhofer.de"}
 ]
-license = "MIT"
-requires-python = ">= 3.10"
+# The binary wheels also bundle SuiteSparse KLU/BTF (LGPL-2.1-or-later) and AMD/COLAMD
+# (BSD-3-Clause) as shared libraries; their texts go into .dist-info/licenses/SuiteSparse.
+license = "BSD-3-Clause AND LGPL-2.1-or-later"
+requires-python = ">= 3.11"
 # numpy is needed at runtime for the zero-copy py::array_t interface.
 dependencies = ["numpy"]
 # conda requrements: suitesparse
 
 [project.urls]
-homepage = "https://github.com/e2niee/parallel_pandapower_solver"
+homepage = "https://github.com/e2nIEE/parallel-pandapower-solver"
 
 [tool.scikit-build]
 # The module is installed into the p3s package by CMake's install() rule, so the
@@ -47,3 +53,45 @@ cmake.build-type = "Release"
 # earlier lowercase spelling here was silently ignored, so wheels were built with
 # -march=native / /arch:AVX2 after all (risking illegal-instruction crashes on older CPUs).
 cmake.define.P3S_CPP_NATIVE = "OFF"
+# Local build artefacts that must not end up in the sdist.
+sdist.exclude = ["*.pyd", "*.so", "build/", "wheelhouse/"]
+
+# ---------------------------------------------------------------------------------------
+# Binary wheels. Run by .github/workflows/wheels.yml; locally (Docker for Linux):
+#   pipx run cibuildwheel --platform linux p3s/cpp
+# before-all builds the KLU subset of SuiteSparse as shared libraries into a fixed prefix
+# (ci/build_klu.py), the build finds it via CMAKE_PREFIX_PATH, and the repair step
+# (auditwheel / delocate / delvewheel) copies those libraries plus the OpenMP runtime
+# into the wheel.
+[tool.cibuildwheel]
+# p3s itself requires Python >= 3.11. Free-threaded (cp3xxt) builds are not selected.
+build = ["cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+skip = ["*-musllinux_*", "*-win32", "*_i686"]
+test-command = "python {package}/ci/smoke_test.py"
+# Fail the test if CMake skipped OpenMP (it is optional there and only logs a status line).
+test-environment = { P3S_EXPECT_OPENMP = "1" }
+
+[tool.cibuildwheel.linux]
+# Runs inside the manylinux container; auditwheel locates the libraries via LD_LIBRARY_PATH.
+before-all = "python3 {package}/ci/build_klu.py /opt/suitesparse-klu"
+environment = { CMAKE_PREFIX_PATH = "/opt/suitesparse-klu", LD_LIBRARY_PATH = "/opt/suitesparse-klu/lib" }
+
+[tool.cibuildwheel.macos]
+# Apple clang ships no OpenMP runtime: use Homebrew's libomp. Its bottles target the
+# runner's macOS version, so the workflow sets MACOSX_DEPLOYMENT_TARGET to match (delocate
+# refuses to bundle a library that needs a newer macOS than the wheel claims).
+before-all = [
+  "brew install libomp",
+  "python3 {package}/ci/build_klu.py /tmp/suitesparse-klu",
+]
+environment = { CMAKE_PREFIX_PATH = "/tmp/suitesparse-klu", OpenMP_ROOT = "$(brew --prefix libomp)" }
+
+[tool.cibuildwheel.windows]
+before-all = "python {package}/ci/build_klu.py C:/suitesparse-klu"
+environment = { CMAKE_PREFIX_PATH = "C:/suitesparse-klu" }
+before-build = "pip install delvewheel"
+# --namespace-pkg: p3s/ belongs to parallel-pandapower-solver; without it delvewheel would
+# write its own p3s/__init__.py into this wheel and clobber that package's one on install.
+# Since nr_klu then sits in a namespace package, delvewheel also copies the DLLs next to it
+# (it warns about this); the duplicate costs ~1 MB per wheel.
+repair-wheel-command = "delvewheel repair --add-path C:/suitesparse-klu/bin --namespace-pkg p3s -w {dest_dir} {wheel}"

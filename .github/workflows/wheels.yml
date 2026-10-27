@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Builds binary wheels of the compiled C++/KLU extension `p3s-cpp` (p3s/cpp) for Linux,
+# Windows and macOS with cibuildwheel, plus an sdist, and optionally uploads them to
+# TestPyPI or PyPI. With the wheels on the index, `pip install parallel-pandapower-solver[cpp]`
+# no longer needs a compiler or SuiteSparse.
+#
+# The per-platform build recipe (KLU build, library bundling, smoke test) lives in the
+# [tool.cibuildwheel] table of p3s/cpp/pyproject.toml, so it can also be run locally.
+#
+# p3s-cpp is its own PyPI project, so publishing needs a trusted publisher for it on
+# pypi.org / test.pypi.org (workflow: wheels.yml, environment: pypi / testpypi).
+
+name: wheels
+
+on:
+  # Build-only check whenever the extension or its packaging changes
+  pull_request:
+    paths:
+      - "p3s/cpp/**"
+      - ".github/workflows/wheels.yml"
+  # Manual run from the Actions tab: build, then upload
+  workflow_dispatch:
+    inputs:
+      upload_server:
+        description: 'upload server'
+        required: true
+        default: 'testpypi'
+        type: choice
+        options:
+          - 'testpypi'
+          - 'pypi'
+
+permissions:
+  contents: read
+
+jobs:
+  build_wheels:
+    name: wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest      # manylinux x86_64
+          - ubuntu-24.04-arm   # manylinux aarch64
+          - windows-latest     # win_amd64
+          - macos-15           # arm64
+          - macos-15-intel     # x86_64
+    steps:
+      - uses: actions/checkout@v7
+
+      # Homebrew's libomp (bundled into the macOS wheels) is built for the runner's macOS
+      # version, so the wheels must not claim to support an older one.
+      - name: Set macOS deployment target
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion | cut -d. -f1).0" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
+        with:
+          package-dir: p3s/cpp
+          output-dir: wheelhouse
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  build_sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build sdist
+        run: pipx run build --sdist --outdir dist p3s/cpp
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  upload:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+
+    # Job-level permissions replace the top-level ones, so contents: read must be repeated here
+    permissions:
+      contents: read
+      id-token: write
+
+    # Same GitHub environments as deploy.yml; each must match the trusted publisher
+    # configured for p3s-cpp on test.pypi.org / pypi.org.
+    environment:
+      name: ${{ inputs.upload_server }}
+      url: ${{ inputs.upload_server == 'pypi' && 'https://pypi.org/p/p3s-cpp/' || 'https://test.pypi.org/p/p3s-cpp/' }}
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -l dist
+
+      - name: Upload to TestPyPI
+        if: ${{ inputs.upload_server == 'testpypi' }}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e #release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          verbose: true
+          skip-existing: true
+
+      - name: Upload to PyPI
+        if: ${{ inputs.upload_server == 'pypi' }}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e #release/v1

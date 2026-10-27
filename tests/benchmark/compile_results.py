@@ -25,7 +25,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 import numpy as np
 from benchmark_batched import BenchmarkResults, MethodResults
@@ -43,7 +43,7 @@ COLORS = [
 ]
 
 
-class Res[T]:
+class Res(Generic[T]):
     def __init__(self, res: T):
         self.results: T = res
 

@@ -1314,6 +1314,13 @@ private:
 
 PYBIND11_MODULE(nr_klu, m) {
     m.doc() = "Fast single-grid polar Newton-Raphson power flow (KLU)";
+    // Whether the batch solvers can run multi-threaded. CMake treats OpenMP as optional, so
+    // the wheel smoke test checks this to catch a build that silently fell back to serial.
+#ifdef _OPENMP
+    m.attr("openmp") = true;
+#else
+    m.attr("openmp") = false;
+#endif
     m.def("solve_single", &solve_single,
           py::arg("Yp"), py::arg("Yj"), py::arg("Yx"), py::arg("Sbus"),
           py::arg("V0"), py::arg("pv"), py::arg("pq"),

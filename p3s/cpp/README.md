@@ -126,6 +126,8 @@ a `Solver` per topology and invalidates it when the `Ybus` structure changes.
 | `CMakeLists.txt` | Portable CMake build (pybind11 + KLU + optional OpenMP); used by `pip install parallel-pandapower-solver[cpp]`. |
 | `pyproject.toml` | scikit-build-core definition for the `p3s-cpp` distribution. |
 | `cmake/FindKLU.cmake` | KLU locator fallback for installs without a CMake config package. |
+| `ci/build_klu.py` | Builds the KLU subset of SuiteSparse as shared libraries for the release wheels (cibuildwheel `before-all`). |
+| `ci/smoke_test.py` | Checks an installed wheel (import, bundled libraries, OpenMP, single + batch solve); cibuildwheel `test-command`. |
 | `test_integration.py` | `NewtonPowerflowCpp.calculate` vs pandapower `runpp` (vm/va error + timing). |
 | `test_selfconsistent.py` | Converged `V` drives p3s's *own* power-balance mismatch to ~0 (isolates solver correctness from any p3s-vs-pandapower model gap). |
 
@@ -147,7 +149,7 @@ juggling.
 
 ### Install
 ```bash
-# opt-in extra of the main package (pulls in the p3s-cpp distribution)
+# opt-in extra of the main package (pulls in a precompiled p3s-cpp wheel, KLU bundled)
 pip install parallel-pandapower-solver[cpp]
 
 # from a source checkout, build this sub-package directly:
@@ -177,3 +179,33 @@ Windows notes:
 | (one-time `Solver` analyze)                | ~6.4 ms | — |
 
 All cases validate to ≤1.4e-11 vs pandapower.
+
+
+## License and SuiteSparse
+
+p3s-cpp is licensed under BSD-3-Clause. The source code in this directory contains
+no SuiteSparse code: `nr_klu.cpp` and `lean_lu.hpp` only include the public KLU
+header (`klu.h`) and call the KLU API. CMake locates an existing SuiteSparse
+installation at build time (see *Building* above).
+
+SuiteSparse is used only as a library in the compiled wheels published on PyPI.
+To make `pip install p3s-cpp` work without a separate SuiteSparse installation,
+each wheel bundles these unmodified SuiteSparse shared libraries, dynamically
+linked to `nr_klu`:
+
+| Library            | License           |
+|--------------------|-------------------|
+| KLU                | LGPL-2.1-or-later |
+| BTF                | LGPL-2.1-or-later |
+| AMD                | BSD-3-Clause      |
+| COLAMD             | BSD-3-Clause      |
+| SuiteSparse_config | BSD-3-Clause      |
+
+No other SuiteSparse component is bundled, in particular none of the GPL-licensed
+CHOLMOD modules. The bundled libraries stay under their own licenses, whose full
+texts ship in the wheel's `.dist-info/licenses/` directory. They are separate files
+in the wheel and can be replaced with your own compatible build. The source of the
+exact SuiteSparse version used is attached to each release and available at
+https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/vX.Y.Z.
+
+Building p3s-cpp from source against your own SuiteSparse installation bundles nothing.

@@ -35,7 +35,7 @@ import sys
 import time
 import warnings
 from datetime import datetime
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 import numpy as np
 import pandapower.networks.power_system_test_cases as pstc
@@ -55,7 +55,7 @@ except ImportError:
 
 warnings.filterwarnings("ignore", message="Matrix is exactly singular")
 
-type methods_type = Literal["p3s-1thr", "p3s-Nthr", "l2g-1thr", "l2g-Nthr"]
+methods_type: TypeAlias = Literal["p3s-1thr", "p3s-Nthr", "l2g-1thr", "l2g-Nthr"]
 ALL_METHODS: list[methods_type] = ["p3s-1thr", "p3s-Nthr", "l2g-1thr", "l2g-Nthr"]
 
 
