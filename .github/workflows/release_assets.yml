@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Fraunhofer IEE
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Attaches the source code of the SuiteSparse libraries bundled in the p3s-cpp wheels
+# (KLU and BTF are LGPL-2.1-or-later) to every published GitHub release. The archive holds
+# exactly the SuiteSparse subset the wheels are built from plus p3s/cpp/ci/build_klu.py,
+# taken from the SHA-256 pinned upstream release; the NOTICE.txt in each wheel points here.
+# If the upload fails, re-run this job from the Actions tab.
+
+name: release assets
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  klu_source:
+    runs-on: ubuntu-latest
+
+    # Uploading release assets needs write access to the repository contents
+    permissions:
+      contents: write
+
+    steps:
+      # The release event checks out the released tag, so the archive matches its wheels
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build the KLU source archive
+        run: python p3s/cpp/ci/build_klu.py --source-archive release-assets
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" release-assets/*.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
