@@ -10,13 +10,16 @@ or test fixtures -- so it checks exactly what the wheel ships: that the module i
 converge on a small hand-built grid.
 
 Set P3S_EXPECT_OPENMP=1 to also fail when the extension was built without OpenMP (which
-CMake otherwise skips silently, leaving the batch solver single-threaded).
+CMake otherwise skips silently, leaving the batch solver single-threaded), and
+P3S_EXPECT_LICENSES=1 to fail when the wheel lacks the license and notice files of the
+libraries it bundles (only release wheels bundle any, see ci/build_klu.py).
 
 Run:  python p3s/cpp/ci/smoke_test.py   (from a directory that does not shadow p3s)
 """
 
 import os
 import sys
+from importlib.metadata import distribution
 
 import numpy as np
 
@@ -59,11 +62,44 @@ def _mismatch(Y: np.ndarray, V: np.ndarray, Sbus: np.ndarray, pv: np.ndarray, pq
     return float(np.max(np.abs(np.r_[mis[np.r_[pv, pq]].real, mis[pq].imag])))
 
 
+_SUITESPARSE_LICENSES = [
+    "SuiteSparse/KLU-License.txt",
+    "SuiteSparse/BTF-License.txt",
+    "SuiteSparse/LGPL-2.1.txt",
+    "SuiteSparse/AMD-License.txt",
+    "SuiteSparse/COLAMD-License.txt",
+    "SuiteSparse/SuiteSparse_config-README.txt",
+]
+# License texts of the bundled OpenMP runtime; the MSVC runtime on Windows has none.
+_RUNTIME_LICENSES = {
+    "linux": ["OpenMP/GPL-3.0.txt", "OpenMP/GCC-exception-3.1.txt"],
+    "darwin": ["OpenMP/LLVM-OpenMP-LICENSE.txt"],
+    "win32": [],
+}
+
+
+def _check_licenses() -> None:
+    """The wheel's .dist-info/licenses must cover p3s-cpp and every bundled library."""
+    platform = "linux" if sys.platform.startswith("linux") else sys.platform
+    shipped = {
+        str(f).replace("\\", "/").split(".dist-info/licenses/", 1)[1]
+        for f in distribution("p3s-cpp").files or []
+        if ".dist-info/licenses/" in str(f).replace("\\", "/")
+    }
+    print(f"licenses: {sorted(shipped)}")
+    expected = ["LICENSE", "NOTICE.txt", *_SUITESPARSE_LICENSES, *_RUNTIME_LICENSES.get(platform, [])]
+    missing = [name for name in expected if name not in shipped]
+    if missing:
+        sys.exit(f"wheel is missing license files: {missing}")
+
+
 def main() -> None:
     print(f"nr_klu: {nr_klu.__file__}")
     print(f"nr_klu.openmp = {getattr(nr_klu, 'openmp', 'n/a')}")
     if os.environ.get("P3S_EXPECT_OPENMP") == "1" and not getattr(nr_klu, "openmp", False):
         sys.exit("nr_klu was built without OpenMP, but P3S_EXPECT_OPENMP=1")
+    if os.environ.get("P3S_EXPECT_LICENSES") == "1":
+        _check_licenses()
 
     Y = _ybus()
     Yp, Yj, Yx = _csr(Y)
