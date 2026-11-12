@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Top-level phase timing for the GPU cuDSS contingency path (run on the cluster).
+"""Top-level phase timing for the GPU contingency path (run on the cluster).
 
 Decomposes the wall clock of the contingency pipeline into: build_net, case generation
 (host), input assembly, V0/pin build, solver init, and the full solve call. Useful for
@@ -10,7 +10,8 @@ seeing where wall-clock goes at a given grid size / contingency count (e.g. when
 larger grids in future). Most of the non-solve time is serial Python/numpy host prep, part
 of which the CPU path shares.
 
-    python -m tests.benchmark.benchmark_n_1_cuda --limit 2000 --gpu-max-chunk 1024
+    python -m tests.benchmark.benchmark_n_1_cuda --limit 2000
+    python -m tests.benchmark.benchmark_n_1_cuda --limit 2000 --gpu-backend cudss --gpu-max-chunk 256
 
 Prints a phase breakdown (ms + % of total) and ms/contingency.
 """
@@ -31,6 +32,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=2000)
     ap.add_argument("--gpu-max-chunk", type=int, default=None)
+    ap.add_argument("--gpu-backend", choices=("lean", "cudss", "rf", "qr"), default="lean")
     ap.add_argument("--init", choices=("dc", "flat"), default="flat")
     args = ap.parse_args()
 
@@ -64,7 +66,7 @@ def main():
         np.ascontiguousarray(batch.Yx_base, dtype=np.complex128),
         np.ascontiguousarray(batch.pv, dtype=np.int32),
         np.ascontiguousarray(batch.pq, dtype=np.int32),
-        backend="cudss",
+        backend=args.gpu_backend,
     )
     solver.max_chunk = args.gpu_max_chunk
     t = time.perf_counter()
@@ -72,13 +74,9 @@ def main():
     t0 = t
 
     v_start = dc_initial_voltage(gen._npf) if args.init == "dc" else gen._npf._initial_voltage.copy()
-    # complex Yx (nnz,L); mag/angle conversion is done on the GPU (yx_to_polar) in the _cx
-    # solve path -- NOT on the host, so there is no host abs/angle phase to time here.
-    Yx_mat = np.ascontiguousarray(batch.Yx_matrix, dtype=np.complex128)
+    # The per-case Ybus goes to the GPU as the sparse outage stamps the generator already
+    # holds (expanded on the device), so there is no dense (nnz, L) matrix to build here.
     Sbus = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)
-    t = time.perf_counter()
-    T["assemble Yx (complex, no host abs/angle)"] = t - t0
-    t0 = t
 
     V0 = np.empty((n, L), dtype=np.complex128)
     pin = np.zeros((n, L), dtype=np.uint8)
@@ -95,22 +93,16 @@ def main():
     T["build V0/pin (per-case loop)"] = t - t0
     t0 = t
 
-    # the actual solve (includes host->device transfer + cuDSS analysis + GPU solve)
+    # the actual solve (host->device transfer + Newton loop on the GPU + stragglers on the CPU)
     _ = sync_t()
     tS = time.perf_counter()
-    res = solver.solve_batch_contingency_cx(
-        Yx_mat,
-        Sbus,
-        np.ascontiguousarray(V0, dtype=np.complex128),
-        np.ascontiguousarray(pin, dtype=np.uint8),
-        max_iter=10,
-    )
-    T["solve (GPU polar-conv + transfer + analysis + GPU loop)"] = sync_t() - tS
+    res = solver.solve_batch_contingency_stamp(batch._stamp, Sbus, V0, pin, max_iter=10)
+    T["solve (transfer + GPU Newton loop + CPU stragglers)"] = sync_t() - tS
 
     total = sum(T.values())
     print(
-        f"\npegase N-1: L={L} contingencies, n={n}, chunk={args.gpu_max_chunk}, "
-        f"converged {int(res['converged'].sum())}/{L}"
+        f"\npegase N-1: L={L} contingencies, n={n}, backend={args.gpu_backend}, "
+        f"converged {int(res['converged'].sum())}/{L}, {solver.last_stats}"
     )
     print("=" * 66)
     for k, v in T.items():

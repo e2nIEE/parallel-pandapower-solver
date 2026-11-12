@@ -48,7 +48,8 @@ Once you have a copy of the source, you can install it with:
 Testing cuda hardware
 ---------------------
 
-cuda-toolkit and cuDSS must be available,
+The cuda-toolkit must be available (the GPU kernels are compiled with nvcc on first use); cuDSS is
+optional and only needed for :code:`backend="cudss"`,
 
 .. code-block:: sh
 
@@ -63,7 +64,8 @@ Since many different cuda libraries exist, with different paths and setups, a te
     python -m p3s.cuda.check_cudss
 
 this script will check if cudss is actually usable for p3s. Nvidia cuDSS is currently the newest sparse matrix solver,
-available for Nvidia hardware.
+available for Nvidia hardware. The default linear solver of the GPU path (:code:`backend="lean"`) is p3s's own kernel
+and does not depend on it.
 
 .. code-block:: sh
 

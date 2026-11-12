@@ -54,24 +54,26 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
       deprecated cuSolverRf batch path. Kept for old CUDA-11 environments.
 
     * The ``*_cudss`` methods (``calculate_cudss``, ``calculate_timeseries_cudss``,
-      ``calculate_contingency_cudss``) drive the modern, fully device-resident polar
-      solver ``p3s.cuda.nr_polar_solver.PolarNewtonSolverCUDA`` (cuDSS batched
-      direct solve, Jacobian assembled on the GPU). These are the easy, ``net``-driven
-      wrappers -- the CUDA counterparts of ``NewtonPowerflowCpp`` around
-      ``nr_klu.Solver`` -- and are the preferred entry points for batched
-      (time-series / N-1 contingency) calculations.
+      ``calculate_contingency_cudss``) drive the fully device-resident polar solver
+      ``p3s.cuda.nr_polar_solver.PolarNewtonSolverCUDA`` (Jacobian assembled, factorized
+      and solved on the GPU). These are the easy, ``net``-driven wrappers -- the CUDA
+      counterparts of ``NewtonPowerflowCpp`` around ``nr_klu.Solver`` -- and are the
+      preferred entry points for batched (time-series / N-1 contingency) calculations.
+      Their ``backend`` argument picks the linear solver of the Newton step: ``"lean"``
+      (default), the batched static-pivot LU kernel that needs nothing but CUDA, or
+      ``"cudss"``, NVIDIA cuDSS. The method names predate the lean kernel.
 
     Requires a working CUDA environment. Falls back by raising if the GPU is unavailable.
     """
 
     def __init__(self, net: pandapowerNet):
         super().__init__(net)
-        # Cached device-resident polar solver (cuDSS back-end). The symbolic
-        # factorization depends only on the Ybus sparsity pattern + pv/pq split, so a
-        # single solver is reused across calculate_*_cudss calls while the topology is
-        # unchanged. Invalidated (rebuilt) when the Ybus structure (nnz) changes.
+        # Cached device-resident polar solver. The symbolic factorization depends only on
+        # the Ybus sparsity pattern + pv/pq split, so a single solver is reused across
+        # calculate_*_cudss calls while the topology is unchanged; value-only changes of
+        # Ybus are pushed with update_Y. Rebuilt when the pattern or the backend changes.
         self._cudss_solver = None
-        self._cudss_solver_nnz = None
+        self._cudss_solver_key = None
 
     def calculate_cuda(self, net: pandapowerNet, tolerance: float = 1e-5, max_iterations: int = 30, **kwargs):
         """Single operating-point Newton-Raphson using the GPU cuSolverRf solver
@@ -117,15 +119,14 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         return voltage
 
     # ------------------------------------------------------------------ cuDSS path
-    def _get_cudss_solver(self, backend: str = "cudss", reorder: str = "symrcm"):
+    def _get_cudss_solver(self, backend: str = "lean", reorder: str = "symrcm"):
         """Build (or reuse) the device-resident polar solver for this grid topology.
 
         Mirrors the cached-``nr_klu.Solver`` pattern in ``NewtonPowerflowCpp``: the
         symbolic factorization depends only on the Ybus sparsity pattern + pv/pq split, so
-        the solver is created once and reused across ``calculate_*_cudss`` calls. Unlike
-        ``nr_klu.Solver`` there is no in-place ``update_Y``. ``PolarNewtonSolverCUDA``
-        bakes the Ybus polar values into its topology at construction, so a change in the
-        Ybus structure (nnz) rebuilds the solver.
+        the solver is created once and reused across ``calculate_*_cudss`` calls. On reuse
+        the current Ybus values are pushed with ``update_Y`` (e.g. after a tap change); a
+        change of the pattern, the bus types or the backend rebuilds the solver.
         """
         from p3s.cuda.nr_polar_solver import PolarNewtonSolverCUDA
 
@@ -135,10 +136,14 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         pv_i = np.ascontiguousarray(self.busses["pv"], dtype=np.int32)
         pq_i = np.ascontiguousarray(self.busses["pq"], dtype=np.int32)
 
-        nnz = Yj.shape[0]
-        if self._cudss_solver is None or self._cudss_solver_nnz != nnz:
+        key = (backend, reorder, Yp.tobytes(), Yj.tobytes(), pv_i.tobytes(), pq_i.tobytes())
+        if self._cudss_solver is None or self._cudss_solver_key != key:
+            if self._cudss_solver is not None:
+                self._cudss_solver.free()
             self._cudss_solver = PolarNewtonSolverCUDA(Yp, Yj, Yx, pv_i, pq_i, reorder=reorder, backend=backend)  # type: ignore[assignment]
-            self._cudss_solver_nnz = nnz
+            self._cudss_solver_key = key
+        else:
+            self._cudss_solver.update_Y(Yx)
         return self._cudss_solver
 
     def calculate_cudss(
@@ -147,7 +152,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         tolerance: float = 1e-8,
         max_iterations: int = 30,
         init: str = "dc",
-        backend: str = "cudss",
+        backend: str = "lean",
         **kwargs,
     ) -> NDArray:
         """Single operating-point Newton-Raphson via the device-resident polar solver.
@@ -183,15 +188,16 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         tolerance: float = 1e-8,
         max_iterations: int = 30,
         init: str = "dc",
-        backend: str = "cudss",
+        backend: str = "lean",
         max_chunk: int | None = None,
+        precision: str = "double",
     ) -> NDArray:
         """Batched (time-series) Newton-Raphson via the device-resident polar solver.
 
         The GPU counterpart of ``NewtonPowerflowCpp.calculate_timeseries_cpp``: every time
         step is an independent Newton solve on the *same* grid topology, so the symbolic
         factorization is built once (cached solver) and the whole batch is solved on the
-        GPU by ``PolarNewtonSolverCUDA.solve_batch`` (cuDSS). The same Sbus delta matrix +
+        GPU by ``PolarNewtonSolverCUDA.solve_batch``. The same Sbus delta matrix +
         DC-init are reused (``p3s.timeseries``), so results match the C++ / CPU paths
         and pandapower per step.
 
@@ -203,9 +209,15 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         init: {"dc", "flat"}, default "dc"
             Shared start-voltage strategy (see ``dc_initial_voltage``); prefer "flat" on
             very large meshed nets where p3s's DC model is inaccurate.
+        backend: {"lean", "cudss", "rf", "qr"}, default "lean"
+            Linear solver of the Newton step (see ``PolarNewtonSolverCUDA``).
         max_chunk: int, optional
-            Hard cap on the per-chunk batch size (columns solved as one cuDSS batch),
+            Hard cap on the per-chunk batch size (time steps solved as one GPU batch),
             independent of the GPU memory budget. ``None`` = memory-budget only.
+        precision: {"double", "mixed"}, default "double"
+            ``"mixed"`` lets the lean backend factorize in single precision while a time
+            step is far from its solution (faster; the mismatch and the convergence test
+            stay double). Ignored by the other backends.
 
         Returns
         -------
@@ -223,6 +235,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
 
         solver = self._get_cudss_solver(backend=backend)
         solver.max_chunk = max_chunk
+        solver.precision = precision
         result = solver.solve_batch(
             np.ascontiguousarray(sbus_matrix, dtype=np.complex128),
             np.ascontiguousarray(v_init, dtype=np.complex128),
@@ -232,7 +245,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         if not bool(np.all(result["converged"])):
             n_bad = int((~result["converged"]).sum())
             raise LoadflowNotConverged(
-                f"cuDSS batch did not converge for {n_bad} of {T} time steps in {max_iterations} iterations."
+                f"GPU batch did not converge for {n_bad} of {T} time steps in {max_iterations} iterations."
             )
         return result["V"]  # (n_bus, T)
 
@@ -243,7 +256,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         tolerance: float = 1e-8,
         max_iterations: int = 30,
         init: str = "dc",
-        backend: str = "cudss",
+        backend: str = "lean",
         max_chunk: int | None = None,
     ):
         """Batched N-1 contingency analysis via the device-resident polar solver.

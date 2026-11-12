@@ -17,6 +17,7 @@ Directory Structure
 - :code:`benchmark_cpu.sbatch` SLURM job to run pegase with different core counts
 - :code:`benchmark_gpu.bsbatch` SLURM job for all IEEE cases on gpu only
 - :code:`benchmark_n_1_pegase.py` Standalone N-1 contingency-analysis benchmark on IEEE Pegase 9241
+- :code:`benchmark_gpu_throughput.py` Power flows per second of the GPU solver on a time-series batch
 - :code:`benchmark_n-1.bsbatch` SLURM job for contingency analysis test
 - :code:`cpu_benchmark_results.py` Results aggregation tool for the cpu benchmark
 
@@ -159,7 +160,7 @@ at a time -- comparing:
 - a pandapower per-contingency loop (a fresh :code:`runpp` per outage), the reference an N-1
   study would otherwise run.
 
-GPU backend (fully-resident polar cuSolverRf path) is also supported via
+GPU backend (fully-resident polar path) is also supported via
 :code:`solve_contingencies_cuda`.
 
 Quick Start
@@ -185,14 +186,15 @@ GPU backend
 .. code-block:: bash
 
     python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --limit 2000
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-backend cudss
     python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-max-chunk 512
     python -m tests.benchmark.benchmark_n_1_pegase --backend both --limit 2000  # CPU vs GPU
 
 :code:`--backend gpu` needs pycuda + a CUDA GPU + nvcc on PATH (the polar kernels compile at
 import). :code:`--backend both` times CPU and GPU on the same net and reports the GPU/CPU
-speedup and their max voltage disagreement on mutually-converged cases. On a small GPU (e.g.
-4 GB), cap the per-chunk batch with :code:`--gpu-max-chunk` (the solver also chunks by free
-memory automatically). :code:`--backend cpp` (default) is the original nr_klu path.
+speedup and their max voltage disagreement on mutually-converged cases. The solver chunks the
+batch by free device memory on its own; :code:`--gpu-max-chunk` caps the chunk further.
+:code:`--backend cpp` is the original nr_klu path.
 
 Options
 -------
@@ -205,7 +207,7 @@ Options
 - :code:`--chunk N` CPU only: solve in memory-bounded chunks of N contingencies
 - :code:`--backend {cpp,gpu,both}` Which p3s solver to time (default cpp)
 - :code:`--gpu-max-chunk N` GPU: cap the per-chunk batch size
-- :code:`--gpu-backend {rf,qr,cudss}` GPU linear-solve backend (default cudss)
+- :code:`--gpu-backend {lean,cudss,rf,qr}` GPU linear-solve backend (default lean)
 - :code:`--output-dir / -o` Output directory for results JSON
 - :code:`--job-id / -j` Job ID for output file naming
 
@@ -220,6 +222,28 @@ Notes
 - With :code:`--chunk`, the full result table (n_bus x L complex128, ~2.4 GB for pegase over
   all ~16k branches) is kept in memory one chunk at a time, but no result table is retained,
   which disables :code:`--validate`.
+
+GPU Throughput Benchmark
+========================
+
+:code:`benchmark_gpu_throughput.py` reports the throughput of the GPU solver in power flows per
+second: one grid, :code:`T` operating points with jittered loads, each solved to 1e-8 from the
+same start voltage. Only the solve call is timed. The all-core C++ solver runs on the same batch
+as reference and result check.
+
+.. code-block:: bash
+
+    # pegase 9241, lean backend, T = 256 / 1024 / 4096
+    python -m tests.benchmark.benchmark_gpu_throughput
+
+    # compare the linear-solve backends and show where the time goes
+    python -m tests.benchmark.benchmark_gpu_throughput --backends lean cudss --profile
+
+    # another grid, larger batches
+    python -m tests.benchmark.benchmark_gpu_throughput --case case118 --T 1024 16384
+
+Throughput grows with the batch size until the GPU is saturated; give a large GPU a large
+:code:`--T` (the solver splits the batch into chunks that fit the free device memory).
 
 References
 ==========

@@ -108,7 +108,7 @@ def main():
 
     src_path = os.path.join(os.path.dirname(__file__), "nr_polar_kernels.cu")
     mod = SourceModule(open(src_path).read(), no_extern_c=True)
-    for k in ("eval_F_and_J_polar", "gather_J_polar", "negate_F", "update_voltage_polar", "inf_norm_per_column"):
+    for k in ("init_state", "eval_FJ", "newton_decide", "apply_step", "finalize", "lean_factor_solve_f64"):
         mod.get_function(k)
     _ok("kernels compiled and all functions found")
 
