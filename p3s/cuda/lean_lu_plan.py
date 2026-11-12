@@ -177,12 +177,12 @@ def _deal(level: NDArray, weight: NDArray, n_levels: int, slots: int):
     """
     o = np.lexsort((-weight, level))
     lv = level[o]
-    first = np.searchsorted(lv, np.arange(n_levels))
+    first: NDArray = np.searchsorted(lv, np.arange(n_levels))
     rank = np.arange(len(o)) - first[lv]
     rnd, pos = np.divmod(rank, slots)
     slot = np.where(rnd % 2 == 0, pos, slots - 1 - pos)
     key = lv * slots + slot
-    ptr = np.zeros(n_levels * slots + 1, np.int64)
+    ptr: NDArray = np.zeros(n_levels * slots + 1, np.int64)
     ptr[1:] = np.cumsum(np.bincount(key, minlength=n_levels * slots))
     return o[np.argsort(key, kind="stable")], ptr
 
@@ -195,7 +195,7 @@ def fill_reducing_order(m: int, Ap: NDArray, Ai: NDArray) -> NDArray:
     dominant so the throw-away numeric factorization SuperLU also runs cannot fail.
     """
     colcount = np.diff(Ap)
-    col = np.repeat(np.arange(m), colcount)
+    col: NDArray = np.repeat(np.arange(m), colcount)
     vals = np.where(Ai == col, 2.0 * colcount[col] + 1.0, 1.0)
     A = sp.csc_matrix((vals, Ai, Ap), shape=(m, m))
     lu = spla.splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options={"SymmetricMode": True})
@@ -213,7 +213,7 @@ def build_lean_lu_plan(Ap, Aj, slots: int = 32, perm: NDArray | None = None) -> 
     Aj = np.asarray(Aj, dtype=np.int64)
     m = len(Ap) - 1
     nnzA = len(Aj)
-    Arow = np.repeat(np.arange(m), np.diff(Ap))
+    Arow: NDArray = np.repeat(np.arange(m), np.diff(Ap))
 
     S = sp.csr_matrix((np.ones(nnzA), Aj, Ap), shape=(m, m))
     S = (S + S.T + sp.identity(m, format="csr")).tocsc()
@@ -223,15 +223,15 @@ def build_lean_lu_plan(Ap, Aj, slots: int = 32, perm: NDArray | None = None) -> 
     if perm is None:
         perm = fill_reducing_order(m, Sp_, Si)
     perm = np.ascontiguousarray(perm, dtype=np.int64)
-    pinv = np.empty(m, np.int64)
+    pinv: NDArray = np.empty(m, np.int64)
     pinv[perm] = np.arange(m)
 
     Lp, Li, height, depth = _symbolic(m, Sp_, Si, perm)
     cc = np.diff(Lp)  # |S_t|
     nL = len(Li)
-    Lcol = np.repeat(np.arange(m), cc)
+    Lcol: NDArray = np.repeat(np.arange(m), cc)
     rank = np.arange(nL) - Lp[Lcol]
-    base = np.zeros(m + 1, np.int64)
+    base: NDArray = np.zeros(m + 1, np.int64)
     base[1:] = np.cumsum(2 * cc + 1)
     nnz_lu = int(base[-1])
     if nnz_lu >= 2**31 - 1:
@@ -251,7 +251,7 @@ def build_lean_lu_plan(Ap, Aj, slots: int = 32, perm: NDArray | None = None) -> 
 
     # ---- pairs: pivot t contributes L(a, t) * U(t, b) to entry (a, b) for all a, b in S_t
     reps = cc[Lcol]
-    ea = np.repeat(np.arange(nL), reps)
+    ea: NDArray = np.repeat(np.arange(nL), reps)
     eb = Lp[Lcol[ea]] + (np.arange(len(ea)) - np.repeat(np.cumsum(reps) - reps, reps))
     pa = posL[ea]
     pb = posU[eb]
@@ -259,25 +259,25 @@ def build_lean_lu_plan(Ap, Aj, slots: int = 32, perm: NDArray | None = None) -> 
     n_pairs = len(pa)
 
     # ---- tasks: one per factor entry
-    piv = np.empty(nnz_lu, np.int64)
-    code = np.full(nnz_lu, TASK_U, np.int64)
+    piv: NDArray = np.empty(nnz_lu, np.int64)
+    code: NDArray = np.full(nnz_lu, TASK_U, np.int64)
     piv[base[:-1]] = np.arange(m)
     code[base[:-1]] = TASK_DIAG
     piv[posU] = Lcol
     piv[posL] = Lcol
     code[posL] = base[Lcol]
     npairs = np.bincount(ptgt, minlength=nnz_lu)
-    in_A = np.zeros(nnz_lu, bool)
+    in_A: NDArray = np.zeros(nnz_lu, bool)
     in_A[apos] = True
     code[(code == TASK_U) & (npairs == 0)] = TASK_COPY
     tids = np.arange(nnz_lu)
     n_levels = int(height.max()) + 1 if m else 0
     order, lptr = _deal(height[piv[tids]], npairs[tids], n_levels, slots)
     tdst = tids[order]
-    task_of = np.full(nnz_lu, -1, np.int64)
+    task_of: NDArray = np.full(nnz_lu, -1, np.int64)
     task_of[tdst] = np.arange(len(tdst))
     po = np.argsort(task_of[ptgt], kind="stable")
-    tpp = np.zeros(len(tdst) + 1, np.int64)
+    tpp: NDArray = np.zeros(len(tdst) + 1, np.int64)
     tpp[1:] = np.cumsum(npairs[tdst])
     tdst_enc = tdst.astype(np.int32)
     tdst_enc[~in_A[tdst]] |= FILL_BIT
@@ -285,7 +285,7 @@ def build_lean_lu_plan(Ap, Aj, slots: int = 32, perm: NDArray | None = None) -> 
     # ---- triangular solves
     ro = np.argsort(Li, kind="stable")  # L entries grouped by row
     fcount = np.bincount(Li, minlength=m)
-    fptr = np.zeros(m + 1, np.int64)
+    fptr: NDArray = np.zeros(m + 1, np.int64)
     fptr[1:] = np.cumsum(fcount)
     frow, flptr = _deal(height, fcount, n_levels, slots)
     n_blevels = int(depth.max()) + 1 if m else 0

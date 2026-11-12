@@ -89,7 +89,7 @@ class PolarTopology:
 
 def _compute_diag_ix(Yp: NDArray, Yj: NDArray, n: int) -> NDArray:
     """CSR data index of the diagonal entry of each row (-1 if absent)."""
-    row = np.repeat(np.arange(n, dtype=np.int64), np.diff(Yp))
+    row: NDArray = np.repeat(np.arange(n, dtype=np.int64), np.diff(Yp))
     k = np.nonzero(Yj == row)[0]
     Ydiag: NDArray = np.full(n, -1, dtype=np.int32)
     # assigned in reverse, so that for a (malformed) duplicated diagonal the FIRST entry wins
@@ -136,15 +136,18 @@ def build_polar_topology(Yp, Yj, Yx, pv, pq) -> PolarTopology:
     # A Ybus nonzero k = (bus_row, bus_col) contributes one entry per (equation, variable)
     # pair that exists:  P row iff bus_row is pvpq, Q row iff bus_row is pq;
     #                    dVa column iff bus_col is pvpq, dVm column iff bus_col is pq.
-    k_all = np.arange(nnzY, dtype=np.int64)
-    bus_row = np.repeat(np.arange(n, dtype=np.int64), np.diff(Yp))
+    k_all: NDArray = np.arange(nnzY, dtype=np.int64)
+    bus_row: NDArray = np.repeat(np.arange(n, dtype=np.int64), np.diff(Yp))
     bus_col = Yj.astype(np.int64)
     row_p = pvpq_pos[bus_row].astype(np.int64)
     row_q = np.where(pq_pos[bus_row] >= 0, npvpq + pq_pos[bus_row], -1).astype(np.int64)
     col_va = pvpq_pos[bus_col].astype(np.int64)
     col_vm = np.where(pq_pos[bus_col] >= 0, npvpq + pq_pos[bus_col], -1).astype(np.int64)
 
-    rows, cols, ks, blks = [], [], [], []
+    rows: list[NDArray] = []
+    cols: list[NDArray] = []
+    ks: list[NDArray] = []
+    blks: list[NDArray] = []
     for blk, r, c in (
         (BLK_dP_dVa, row_p, col_va),
         (BLK_dP_dVm, row_p, col_vm),
@@ -201,7 +204,7 @@ def jacobian_values_host(t: PolarTopology, Vm: NDArray, Va: NDArray, Yx: NDArray
     Ym = t.Ym if Yx is None else np.abs(Yx)
     Ya = t.Ya if Yx is None else np.angle(Yx)
     n = t.n
-    row = np.repeat(np.arange(n), np.diff(t.Yp))
+    row: NDArray = np.repeat(np.arange(n), np.diff(t.Yp))
     col = t.Yj
     delta = Va[row] - Ya - Va[col]
     s = np.sin(delta)

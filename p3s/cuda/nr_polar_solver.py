@@ -296,8 +296,8 @@ class PolarNewtonSolverCUDA:
         b["mixed"] = False
         self._eval(b, 1 << _ACTIVE, 1 << _ACTIVE)
         self._lean_factor_solve(b, rcond_min=0.0, do_solve=False)
-        status = np.empty(1, dtype=np.int32)
-        pstat = np.empty(2, dtype=np.float64)
+        status: NDArray = np.empty(1, dtype=np.int32)
+        pstat: NDArray = np.empty(2, dtype=np.float64)
         cuda.memcpy_dtoh(status, b["status"])
         cuda.memcpy_dtoh(pstat, b["pstat"])
         if status[0] != _ACTIVE or not np.isfinite(pstat).all() or pstat[1] <= 0.0:
@@ -486,7 +486,7 @@ class PolarNewtonSolverCUDA:
             per += t.nnzY * _C128
         if has_pin:
             per += n
-        if self.backend == "lean":
+        if self.backend == "lean" and self.plan:
             per += (2 * m + self.plan.nnz_lu) * _F64  # R, y, factors
             if self.precision == "mixed":
                 per += self.plan.nnz_lu * 4  # single-precision factors
@@ -676,7 +676,7 @@ class PolarNewtonSolverCUDA:
         b["mixed"] = self.backend == "lean" and self.precision == "mixed"
 
         # linear solver: where the Jacobian, the residual and the Newton step live
-        if self.backend == "lean":
+        if self.backend == "lean" and self.plan:
             b["J"] = buf.get("val", self.plan.nnz_lu * S * _F64)
             b["fac32"] = buf.get("val32", self.plan.nnz_lu * S * 4) if b["mixed"] else 0
             b["R"] = buf.get("R", m * S * _F64)
@@ -833,6 +833,8 @@ class PolarNewtonSolverCUDA:
         """One launch of the lean LU kernel: double (in place in ``J``) or single (factors in
         ``fac32``). With mixed precision each launch only touches the systems that voted
         for its precision."""
+        if not self.plan:
+            return
         p = self.plan
         W = p.slots
         self._k["lean_factor_solve_f32" if single else "lean_factor_solve_f64"].prepared_call(

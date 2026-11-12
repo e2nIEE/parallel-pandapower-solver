@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pycuda.driver as cuda
@@ -18,6 +19,9 @@ except (FileNotFoundError, ImportError):
 
 from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage
+
+if TYPE_CHECKING:
+    from p3s.cuda.nr_polar_solver import PolarNewtonSolverCUDA
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +76,8 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         # the Ybus sparsity pattern + pv/pq split, so a single solver is reused across
         # calculate_*_cudss calls while the topology is unchanged; value-only changes of
         # Ybus are pushed with update_Y. Rebuilt when the pattern or the backend changes.
-        self._cudss_solver = None
-        self._cudss_solver_key = None
+        self._cudss_solver: PolarNewtonSolverCUDA | None = None
+        self._cudss_solver_key: tuple | None = None
 
     def calculate_cuda(self, net: pandapowerNet, tolerance: float = 1e-5, max_iterations: int = 30, **kwargs):
         """Single operating-point Newton-Raphson using the GPU cuSolverRf solver
@@ -140,7 +144,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         if self._cudss_solver is None or self._cudss_solver_key != key:
             if self._cudss_solver is not None:
                 self._cudss_solver.free()
-            self._cudss_solver = PolarNewtonSolverCUDA(Yp, Yj, Yx, pv_i, pq_i, reorder=reorder, backend=backend)  # type: ignore[assignment]
+            self._cudss_solver = PolarNewtonSolverCUDA(Yp, Yj, Yx, pv_i, pq_i, reorder=reorder, backend=backend)
             self._cudss_solver_key = key
         else:
             self._cudss_solver.update_Y(Yx)
