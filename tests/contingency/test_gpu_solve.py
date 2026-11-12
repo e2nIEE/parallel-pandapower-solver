@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Tests: GPU N-1 contingency solver (fully-resident polar cuSolverRf path).
+"""Tests: GPU N-1 contingency solver (fully-resident polar path, every linear-solve backend).
 
 Mirrors ``test_cpu_solve.py`` but for ``solve_contingencies_cuda``: every
 contingency solved on the GPU must match the pandapower full-topology ground truth
@@ -48,13 +48,14 @@ sys.exit(0 if bool(r.converged.all()) else 1)
 def _detect_backends():
     """Return the linear-solve backends usable in THIS environment.
 
-    Backends vary by CUDA install: cusolverRf ("rf") segfaults on CUDA 12.4+; cuDSS
-    ("cudss") needs libcudss. We probe each on a tiny fixture and keep only those that
-    solve correctly, so the parametrized tests run on whatever the machine supports.
+    Backends vary by CUDA install: the batched LU kernel ("lean") needs nothing but CUDA,
+    cusolverRf ("rf") segfaults on CUDA 12.4+, cuDSS ("cudss") needs libcudss. We probe each
+    on a tiny fixture and keep only those that solve correctly, so the parametrized tests
+    run on whatever the machine supports.
     Each probe runs in a subprocess: a segfault cannot be caught in-process and would
     otherwise kill the whole pytest session during collection.
     """
-    return [b for b in ("rf", "qr", "cudss") if runs_cleanly(_PROBE, b)]
+    return [b for b in ("lean", "rf", "qr", "cudss") if runs_cleanly(_PROBE, b)]
 
 
 _AVAILABLE_BACKENDS = _detect_backends()

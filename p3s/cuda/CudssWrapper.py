@@ -93,6 +93,23 @@ CUDSS_PIVOT_AUTO = 0
 CUDSS_PIVOT_NONE = 1  # disable pivot search -- much faster; safe for well-conditioned J
 
 
+def _windows_cuda_dep_dirs():
+    """Directories holding cuDSS's Windows dependencies (CUDA runtime, cuBLAS, nvrtc)."""
+    dirs = []
+    p = os.environ.get("CUDA_PATH")
+    if p:
+        # CUDA 13 moved the runtime DLLs to bin\x64; older toolkits use bin.
+        dirs += [os.path.join(p, "bin", "x64"), os.path.join(p, "bin")]
+    try:
+        import site
+
+        for b in site.getsitepackages():
+            dirs += glob.glob(os.path.join(b, "nvidia", "**", "bin"), recursive=True)
+    except Exception:
+        pass
+    return dirs
+
+
 def _load_cudss():
     """Load libcudss, searching the pip-wheel path first (Linux) or the toolkit (Windows).
 
@@ -100,6 +117,17 @@ def _load_cudss():
     default loader path), so a bare name fails even when installed. Glob the wheel
     dir, then LD_LIBRARY_PATH, then bare names. RTLD_GLOBAL so its CUDA deps resolve.
     """
+    # Explicit override: P3S_CUDSS_LIBRARY=<path to cudss64_*.dll / libcudss.so.*> pins the
+    # library, e.g. to A/B a newer cuDSS build without touching the environment.
+    override = os.environ.get("P3S_CUDSS_LIBRARY")
+    if override:
+        if sys.platform == "win32":
+            for d in (os.path.dirname(override), *_windows_cuda_dep_dirs()):
+                if d and os.path.isdir(d):
+                    os.add_dll_directory(d)
+            return ctypes.WinDLL(override)
+        return ctypes.CDLL(override, mode=ctypes.RTLD_GLOBAL)
+
     if sys.platform == "win32":
         cands = []
         # pip wheel (nvidia-cudss-cuXX): nvidia/cuXX/bin/cudss64_*.dll

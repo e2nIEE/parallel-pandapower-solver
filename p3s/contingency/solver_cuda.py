@@ -34,14 +34,18 @@ def solve_contingencies_cuda(
     max_iter: int = 30,
     init: str = "dc",
     max_chunk: int | None = None,
-    backend: str = "cudss",
+    backend: str = "lean",
+    precision: str = "double",
 ) -> ContingencyResultTable:
     """Solve every N-1 contingency in ``net`` on the GPU polar batch path.
 
     Signature and semantics mirror ``solve_contingencies_cpp`` (minus ``n_threads``,
     which is meaningless on the GPU). ``init`` picks the shared start voltage: "dc" seeds
     angles (needed for phase-shifting transformers), "flat" is the robust choice on very
-    large meshed nets.
+    large meshed nets. ``backend`` is the linear solver of the Newton step: "lean" (the
+    batched LU kernel, default) or "cudss" / "rf" / "qr" -- see ``PolarNewtonSolverCUDA``.
+    ``precision="mixed"`` lets the lean backend factorize in single precision while a case is
+    far from its solution (faster; mismatch and convergence test stay double).
     """
     from p3s.cuda.nr_polar_solver import PolarNewtonSolverCUDA
 
@@ -68,10 +72,9 @@ def solve_contingencies_cuda(
         np.ascontiguousarray(batch.pq, dtype=np.int32),
         backend=backend,
     )
-    # Cap the per-chunk batch at the GPU's RF-solve amortization sweet spot (memory permits
-    # bigger, but past the sweet spot per-column cost rises; ~128 on the RTX A500). None =
-    # memory-budget only, right for large GPUs.
+    # Optional hard cap on the cases solved as one chunk (None = memory budget only).
     solver.max_chunk = max_chunk
+    solver.precision = precision
 
     # Start voltage (one vector reused across all cases) -- identical to solver_cpp.
     if init == "dc":
@@ -81,10 +84,6 @@ def solve_contingencies_cuda(
     else:
         raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
 
-    # Per-case COMPLEX Ybus values (nnz, L). The magnitude/angle conversion + transpose is
-    # done ON THE GPU (solve_batch_contingency_cx -> yx_to_polar kernel), avoiding ~seconds
-    # of single-threaded host np.abs/np.angle/.T on large nets.
-    Yx_mat: NDArray = np.ascontiguousarray(batch.Yx_matrix, dtype=np.complex128)  # (nnz, L)
     Sbus: NDArray = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)
 
     V0: NDArray = np.empty((n, L), dtype=np.complex128)
@@ -99,16 +98,16 @@ def solve_contingencies_cuda(
         v0[unserved] = 1.0 + 0.0j
         V0[:, c] = v0
 
-    res = solver.solve_batch_contingency_cx(
-        Yx_mat,
-        Sbus,
-        np.ascontiguousarray(V0, dtype=np.complex128),
-        np.ascontiguousarray(pin, dtype=np.uint8),
-        max_iter=max_iter,
-        tol=tol,
-    )
+    if batch._stamp is not None:
+        # Every case is the intact Ybus minus its sparse outage stamp. Hand the stamps over
+        # as they are: the per-case Ybus is expanded on the GPU, so the dense (nnz, L)
+        # matrix (~10 GB for a full pegase N-1) is neither built nor uploaded.
+        res = solver.solve_batch_contingency_stamp(batch._stamp, Sbus, V0, pin, max_iter=max_iter, tol=tol)
+    else:
+        Yx_mat: NDArray = np.ascontiguousarray(batch.Yx_matrix, dtype=np.complex128)  # (nnz, L)
+        res = solver.solve_batch_contingency_cx(Yx_mat, Sbus, V0, pin, max_iter=max_iter, tol=tol)
 
-    V = res["V"].copy()  # (n, L)
+    V = res["V"]  # (n, L)
     served = np.stack([c.served for c in batch.cases], axis=1)  # (n, L)
     V[~served] = np.nan
     return ContingencyResultTable(

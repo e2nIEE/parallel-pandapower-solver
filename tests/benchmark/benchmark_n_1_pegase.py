@@ -20,17 +20,18 @@ with the test pipeline). Run it directly:
     python -m tests.benchmark.benchmark_n_1_pegase --skip-pandapower  # p3s only
     python -m tests.benchmark.benchmark_n_1_pegase --threads 8 --validate 25
 
-GPU backend (fully-resident polar cuSolverRf path):
+GPU backend (fully-resident polar path; linear solve: batched lean LU kernel by default):
 
     python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --limit 2000
+    python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-backend cudss
     python -m tests.benchmark.benchmark_n_1_pegase --backend gpu --gpu-max-chunk 512
     python -m tests.benchmark.benchmark_n_1_pegase --backend both --limit 2000  # CPU vs GPU
 
 ``--backend gpu`` needs pycuda + a CUDA GPU + nvcc on PATH (the polar kernels compile at
 import). ``--backend both`` times CPU and GPU on the same net and reports the GPU/CPU
-speedup and their max voltage disagreement on mutually-converged cases. On a small GPU
-(e.g. 4 GB), cap the per-chunk batch with ``--gpu-max-chunk`` (the solver also chunks by
-free memory automatically). ``--backend cpp`` (default) is the original nr_klu path.
+speedup and their max voltage disagreement on mutually-converged cases. The solver chunks
+the batch by free device memory on its own; ``--gpu-max-chunk`` caps the chunk further.
+``--backend cpp`` is the original nr_klu path.
 
 Notes
 -----
@@ -152,7 +153,7 @@ def time_p3s(net, threads: int, chunk: int | None = None):
     return res, dt, int(res.converged.sum()), len(res.groups)
 
 
-def time_gpu(net, max_chunk: int | None = None, backend: str = "cudss"):
+def time_gpu(net, max_chunk: int | None = None, backend: str = "lean"):
     """Warm up, then time the fully-resident polar GPU contingency solve.
 
     Unlike the CPU path, the GPU solver chunks internally (by free-memory budget, capped by
@@ -160,12 +161,12 @@ def time_gpu(net, max_chunk: int | None = None, backend: str = "cudss"):
     return the full ``ContingencyResultTable`` (for the --validate spot-check) + timing.
     Import is local so the CPU-only benchmark never requires pycuda/CUDA.
 
-    ``backend``: "rf" = cusolverRf batched (fast, default); "qr" = cusolverSp per-system QR
-    (robust fallback when cusolverRf segfaults, e.g. CUDA 12.x).
+    ``backend``: linear solver of the Newton step -- "lean" (batched LU kernel, default),
+    "cudss", "rf" (cusolverRf, legacy) or "qr" (cusolverSp per-system QR, slow).
     """
     from p3s.contingency.solver_cuda import solve_contingencies_cuda
 
-    # warm up: kernel compile + cuSolverRf symbolic setup + first factor happen once here,
+    # warm up: kernel compilation and the first device allocations happen once here,
     # so they don't pollute the timed run. Use a tiny subnet (first outage group) to keep
     # the warmup cheap while still exercising the full code path.
     warm = copy.deepcopy(net)
@@ -252,25 +253,25 @@ def _parse_args():
         choices=("cpp", "gpu", "both"),
         default="both",
         help="which p3s solver to time: cpp=nr_klu (default), "
-        "gpu=fully-resident polar cuSolverRf, both=run both and compare",
+        "gpu=fully-resident polar GPU solver, both=run both and compare",
     )
     ap.add_argument(
         "--gpu-max-chunk",
         type=int,
         nargs="+",
-        default=[512],
-        help="GPU: cap the per-chunk batch size (default: memory-budget only). "
-        "On a small GPU (e.g. 4 GB A500) ~128 is the RF-solve sweet spot; "
-        "leave unset on large GPUs (A100) so the memory budget decides.",
+        default=[None],
+        help="GPU: cap the per-chunk batch size (default: memory budget only). "
+        "Several values time the solve once per cap.",
     )
     ap.add_argument(
         "--gpu-backend",
-        choices=("rf", "qr", "cudss"),
-        default="cudss",
-        help="GPU linear-solve backend: cudss=NVIDIA cuDSS batched direct solver "
-        "(DEFAULT; needs nvidia-cudss-cuXX); rf=cusolverRf batched (legacy, "
-        "segfaults on CUDA 12.4); qr=cusolverSp per-system QR (robust but "
-        "slow at scale). Run diagnose_gpu.py to see which work in your env.",
+        choices=("lean", "cudss", "rf", "qr"),
+        default="lean",
+        help="GPU linear-solve backend: lean=batched static-pivot LU kernel (DEFAULT; "
+        "needs nothing but CUDA); cudss=NVIDIA cuDSS uniform batch (needs "
+        "nvidia-cudss-cuXX); rf=cusolverRf batched (legacy, segfaults on CUDA 12.4); "
+        "qr=cusolverSp per-system QR (slow at scale). Run diagnose_gpu.py to see which "
+        "work in your env.",
     )
     ap.add_argument(
         "--output-dir",
@@ -349,11 +350,11 @@ def main():
         contingency_results["methods"]["cpp"] = results
 
     if do_gpu:
-        chunks: list[int] = args.gpu_max_chunk
+        chunks: list[int | None] = args.gpu_max_chunk
 
         results = []
         for chunk in chunks:
-            mc_note = f", max_chunk={chunk}"
+            mc_note = f", max_chunk={chunk}" if chunk else ""
             print(f"\nRunning p3s GPU batch (polar, backend={args.gpu_backend}{mc_note}) ...")
             res_gpu, t_gpu, n_conv_g, _ = time_gpu(net, max_chunk=chunk, backend=args.gpu_backend)
             print(

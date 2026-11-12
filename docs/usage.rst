@@ -112,15 +112,37 @@ A CUDA-accelerated Newton solver. Batched solves run fully on the GPU:
 
 .. code-block:: python
 
-from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
+    from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 
-npf = NewtonPowerflowCUDA(net)
-voltages = npf.calculate_timeseries_cuda(net, timeseries, batch_size=5)
+    npf = NewtonPowerflowCUDA(net)
+    voltages = npf.calculate_timeseries_cudss(net, timeseries)
 
 
-`voltages` has shape `(n_bus, T)`. `batch_size` controls how many operating points
-are solved per GPU chunk. The underlying linear solve can be selected via a
-`backend` argument (e.g. `"cudss"`).
+`voltages` has shape `(n_bus, T)`. The whole Newton iteration (mismatch, Jacobian,
+factorization, solve, line search) stays on the device; the batch is split into chunks that
+fit the free GPU memory (`max_chunk` caps the chunk size further).
+
+The linear solver of the Newton step is selected with the `backend` argument:
+
+- `"lean"` (default): a batched sparse LU kernel with a pivot order and factor pattern
+  frozen once per grid -- the GPU counterpart of the lean refactorization in the C++
+  solver. It needs nothing but CUDA and is the fastest backend.
+- `"cudss"`: NVIDIA cuDSS (uniform batch), a pivoting alternative; needs the
+  `nvidia-cudss-cuXX` package.
+- `"rf"` / `"qr"`: cusolverRf (legacy) and per-system cusolverSp QR (slow).
+
+With the lean backend, `precision="mixed"` factorizes in single precision while an
+operating point is still far from its solution and in double for the final steps. The
+mismatch and the convergence test stay in double precision, so the result satisfies the same
+tolerance; the factorization, which dominates the run time, gets about 1.6x faster (pegase 9241, RTX A500).
+
+If the compiled C++ solver (`p3s-cpp`) is installed, it serves as a safety net: operating
+points the GPU cannot finish (a factorization the frozen pivot order does not suit, no
+convergence) are re-solved by KLU on the CPU, and the last few stragglers of a chunk are
+handed to it as well. Without it such points are reported as not converged.
+
+The older `calculate_timeseries_cuda` assembles the Jacobian on the CPU and only offloads
+the linear solve (cusolverRf); it is kept for legacy CUDA 11 environments.
 
 Time-series data
 ================
@@ -208,14 +230,14 @@ GPU solve
 
     from p3s.contingency.solver_cuda import solve_contingencies_cuda
 
-    res = solve_contingencies_cuda(net, reslack_islands=False, backend="cudss")
+    res = solve_contingencies_cuda(net, reslack_islands=False)
 
 
 :code:`reslack_islands=True` same as before, re-slacks islands that form after an outage, so that the
 whole island is served rather than treated as unserved.
 
-`backend` allows to use different backends, `cudss` (cudss backend), `rf` (old cusolverRF backend)
-and `qr` (cuda QR algorithm, more stable, but slower).
+`backend` selects the linear solver: `lean` (default, batched LU kernel), `cudss` (NVIDIA cuDSS),
+`rf` (old cusolverRF backend) or `qr` (cuda QR algorithm, slower).
 
 ### Result table
 
