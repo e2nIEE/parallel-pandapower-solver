@@ -127,7 +127,9 @@ a `Solver` per topology and invalidates it when the `Ybus` structure changes.
 | `pyproject.toml` | scikit-build-core definition for the `p3s-cpp` distribution. |
 | `cmake/FindKLU.cmake` | KLU locator fallback for installs without a CMake config package. |
 | `ci/build_klu.py` | Builds the KLU subset of SuiteSparse as shared libraries for the release wheels (cibuildwheel `before-all`). |
-| `ci/smoke_test.py` | Checks an installed wheel (import, bundled libraries, OpenMP, single + batch solve); cibuildwheel `test-command`. |
+| `ci/smoke_test.py` | Checks an installed wheel (import, bundled libraries, OpenMP, license files, single + batch solve); cibuildwheel `test-command`. |
+| `licenses/` | License texts of the OpenMP runtimes bundled in the wheels (copied in by `ci/build_klu.py`). |
+| `LICENSE` | Copy of the repository's BSD-3-Clause license, shipped in the p3s-cpp wheels and sdist. |
 | `test_integration.py` | `NewtonPowerflowCpp.calculate` vs pandapower `runpp` (vm/va error + timing). |
 | `test_selfconsistent.py` | Converged `V` drives p3s's *own* power-balance mismatch to ~0 (isolates solver correctness from any p3s-vs-pandapower model gap). |
 
@@ -190,8 +192,8 @@ installation at build time (see *Building* above).
 
 SuiteSparse is used only as a library in the compiled wheels published on PyPI.
 To make `pip install p3s-cpp` work without a separate SuiteSparse installation,
-each wheel bundles these unmodified SuiteSparse shared libraries, dynamically
-linked to `nr_klu`:
+each wheel bundles these SuiteSparse shared libraries, dynamically linked to
+`nr_klu`:
 
 | Library            | License           |
 |--------------------|-------------------|
@@ -202,10 +204,29 @@ linked to `nr_klu`:
 | SuiteSparse_config | BSD-3-Clause      |
 
 No other SuiteSparse component is bundled, in particular none of the GPL-licensed
-CHOLMOD modules. The bundled libraries stay under their own licenses, whose full
-texts ship in the wheel's `.dist-info/licenses/` directory. They are separate files
-in the wheel and can be replaced with your own compatible build. The source of the
-exact SuiteSparse version used is attached to each release and available at
-https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/vX.Y.Z.
+CHOLMOD modules. The wheels also bundle the OpenMP runtime the extension is built
+with, and on Windows the C++ standard library:
+
+| Platform | Runtime library                     | License                                      |
+|----------|-------------------------------------|----------------------------------------------|
+| Linux    | libgomp (GCC)                       | GPL-3.0-or-later WITH GCC-exception-3.1      |
+| macOS    | libomp (LLVM, from Homebrew)        | Apache-2.0 WITH LLVM-exception               |
+| Windows  | msvcp140.dll, vcomp140.dll (MSVC)   | Microsoft Visual C++ Redistributable terms   |
+
+The bundled libraries stay under their own licenses. The wheel's
+`.dist-info/licenses/` directory holds this package's `LICENSE`, their license
+texts and a `NOTICE.txt` that lists what that wheel bundles and where. The code of
+the libraries is unchanged, but the wheel repair tools (auditwheel, delocate,
+delvewheel) copy them into the wheel, on Linux and Windows under new file names
+with a hash suffix, and patch their library names and search paths. They are
+separate files in the wheel and can be replaced with your own compatible build
+under the same file name; `NOTICE.txt` explains this per platform.
+
+The source code of the bundled SuiteSparse libraries is attached to each release
+on GitHub as `SuiteSparse-X.Y.Z-KLU-subset.tar.gz`: exactly the part of the
+upstream SuiteSparse release the wheels are built from, plus the build script
+`ci/build_klu.py`. The `release assets` workflow (`.github/workflows/release_assets.yml`)
+attaches it when a release is published. The same files are part of the upstream
+release at https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/vX.Y.Z.
 
 Building p3s-cpp from source against your own SuiteSparse installation bundles nothing.

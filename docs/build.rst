@@ -108,10 +108,21 @@ The per-platform recipe is the ``[tool.cibuildwheel]`` table in ``p3s/cpp/pyproj
    SuiteSparse_config; no BLAS) from a pinned, checksummed release as shared libraries.
 2. ``nr_klu`` is built against it with ``P3S_CPP_NATIVE=OFF`` (portable baseline ISA)
    and OpenMP (GCC's libgomp, MSVC's vcomp, Homebrew's libomp on macOS).
-3. auditwheel / delocate / delvewheel copy these shared libraries into the wheel. KLU
-   and BTF are LGPL-2.1-or-later and stay separate, replaceable libraries. Their license
-   texts are in the wheel's ``.dist-info/licenses/SuiteSparse``.
-4. ``ci/smoke_test.py`` checks each installed wheel, including that OpenMP was found.
+3. auditwheel / delocate / delvewheel copy these shared libraries and the OpenMP runtime
+   (plus ``msvcp140.dll`` on Windows) into the wheel. KLU and BTF are LGPL-2.1-or-later
+   and stay separate, replaceable libraries. ``build_klu.py`` also stages a
+   ``NOTICE.txt`` for the platform and the license texts of everything bundled (third-party
+   texts from ``p3s/cpp/licenses``), which end up in the wheel's
+   ``.dist-info/licenses`` next to the ``LICENSE`` of p3s-cpp.
+4. ``ci/smoke_test.py`` checks each installed wheel, including that OpenMP was found and
+   that the license and notice files are there.
+
+When a GitHub release is published, the ``release assets`` workflow
+(``.github/workflows/release_assets.yml``) attaches the source code of the bundled
+SuiteSparse libraries to it as ``SuiteSparse-X.Y.Z-KLU-subset.tar.gz``
+(``build_klu.py --source-archive``): exactly the SuiteSparse files the wheels are built
+from, plus ``build_klu.py``. The ``NOTICE.txt`` in each wheel points to that release, so
+publish the GitHub release for every version uploaded to PyPI.
 
 The macOS wheels require at least the runner's macOS version (currently 15), because
 Homebrew's libomp is built for it.
