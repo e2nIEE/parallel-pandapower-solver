@@ -64,7 +64,8 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
     # element is connected to (loads -1/sn, sgen/gen +1/sn; q to the imaginary part).
     # Collect all contributions as one bus-major list and let a parallel kernel write each
     # output row once: the (n_bus, T) result is the only large array this touches.
-    sources, bus, src, row, coef, base, imag = [], [], [], [], [], [], []
+    src: List = []
+    sources, bus, row, coef, base, imag = [], [], [], [], [], []
     for element in net_elements:
         lookup = net[element]["_lookup"].to_numpy().astype(np.int64)  # node, -1 = unsupplied bus
         el = np.nonzero(lookup >= 0)[0]
