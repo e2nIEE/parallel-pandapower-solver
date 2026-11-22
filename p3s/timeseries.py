@@ -18,9 +18,13 @@ drivers share one validated implementation. The functions are duck-typed on a
 """
 
 import logging
+import os
 import sys
 
+import numba
 import numpy as np
+from numba import njit, prange
+from numba.typed import List
 from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
@@ -55,23 +59,93 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
     logger.info("Found %d time_steps for calculation.", T)
 
     sn = net.sn_mva
-    sbus_matrix = np.repeat(pf._sBus[:, None], T, axis=1)  # (n_bus, T) complex
-
+    n_bus = pf._sBus.shape[0]
+    # Every (element, variable) series contributes coef * (value - base) to the bus the
+    # element is connected to (loads -1/sn, sgen/gen +1/sn; q to the imaginary part).
+    # Collect all contributions as one bus-major list and let a parallel kernel write each
+    # output row once: the (n_bus, T) result is the only large array this touches.
+    sources, bus, src, row, coef, base, imag = [], [], [], [], [], [], []
     for element in net_elements:
-        sign = 1.0 if element == "load" else -1.0
-        lookup = net[element]["_lookup"].to_numpy().astype(int)  # node, -1 = unsupplied bus
-        supplied = lookup >= 0
-        base_p = net[element].p_mw.to_numpy()
-        base_q = net[element].q_mvar.to_numpy() if "q_mvar" in net[element] else np.zeros_like(base_p)
+        lookup = net[element]["_lookup"].to_numpy().astype(np.int64)  # node, -1 = unsupplied bus
+        el = np.nonzero(lookup >= 0)[0]
+        sign = -1.0 if element == "load" else 1.0
+        for variable, is_imag in (("p_mw", False), ("q_mvar", True)):
+            if (element, variable) not in timeseries:
+                continue
+            if variable in net[element]:
+                base_v = net[element][variable].to_numpy().astype(np.float64)
+            else:
+                base_v = np.zeros(lookup.size)
+            sources.append(np.ascontiguousarray(np.asarray(timeseries[(element, variable)])[:, :T], dtype=np.float64))
+            bus.append(lookup[el])
+            src.append(np.full(el.size, len(sources) - 1, dtype=np.int64))
+            row.append(el)
+            coef.append(np.full(el.size, sign / sn))
+            base.append(base_v[el])
+            imag.append(np.full(el.size, is_imag))
 
-        if (element, "p_mw") in timeseries:
-            dP = timeseries[(element, "p_mw")] - base_p[:, None]  # (n_el, T)
-            np.add.at(sbus_matrix, lookup[supplied], (-sign * dP[supplied] / sn).astype(np.complex128))
-        if (element, "q_mvar") in timeseries:
-            dQ = timeseries[(element, "q_mvar")] - base_q[:, None]
-            np.add.at(sbus_matrix, lookup[supplied], (-sign * (1j * dQ[supplied]) / sn).astype(np.complex128))
-
+    bus_a = np.concatenate(bus)
+    order = np.argsort(bus_a, kind="stable")  # bus-major, element order kept within a bus
+    ptr = np.zeros(n_bus + 1, dtype=np.int64)
+    ptr[1:] = np.cumsum(np.bincount(bus_a, minlength=n_bus))
+    sbus_matrix = np.empty((n_bus, T), dtype=np.complex128)
+    srcs = List()
+    for x in sources:
+        srcs.append(x)
+    _set_sbus_threads()
+    _fill_sbus(
+        sbus_matrix,
+        np.ascontiguousarray(pf._sBus, dtype=np.complex128),
+        ptr,
+        np.concatenate(src)[order],
+        np.concatenate(row)[order],
+        np.concatenate(coef)[order],
+        np.concatenate(base)[order],
+        np.concatenate(imag)[order],
+        srcs,
+    )
     return sbus_matrix
+
+
+@njit(parallel=True, cache=True)
+def _fill_sbus(out, s0, ptr, src, row, coef, base, imag, sources):  # pragma: no cover - numba
+    """``out[i, t] = s0[i] + sum_k coef[k] * (sources[src[k]][row[k], t] - base[k])`` (times j
+    for imaginary contributions) over the contributions ``k`` of bus ``i``.
+
+    One parallel task per bus: the row is initialized and then updated by each of its
+    contributions while it is cache-resident, and distinct buses never write the same row.
+    """
+    n, T = out.shape
+    for i in prange(n):
+        v = s0[i]
+        for t in range(T):
+            out[i, t] = v
+        for k in range(ptr[i], ptr[i + 1]):
+            x = sources[src[k]][row[k]]
+            c, b = coef[k], base[k]
+            if imag[k]:
+                for t in range(T):
+                    out[i, t] += 1j * (c * (x[t] - b))
+            else:
+                for t in range(T):
+                    out[i, t] += c * (x[t] - b)
+
+
+def usable_cpus() -> int:
+    """CPUs this process may run on.
+
+    Respects a SLURM / taskset CPU mask where the OS reports it (Linux); ``os.cpu_count()``
+    alone counts the whole node and would oversubscribe the allocated cores.
+    """
+    affinity = getattr(os, "sched_getaffinity", None)  # not available on Windows / macOS
+    if affinity is not None:
+        return len(affinity(0))
+    return os.cpu_count() or 1
+
+
+def _set_sbus_threads():
+    """Cap numba's thread count (sized from ``os.cpu_count()``) at the usable CPUs."""
+    numba.set_num_threads(max(1, min(usable_cpus(), numba.config.NUMBA_NUM_THREADS)))
 
 
 def mean_setpoint_vm(net, default: float = 1.0) -> float:

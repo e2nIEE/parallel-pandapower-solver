@@ -245,6 +245,33 @@ as reference and result check.
 Throughput grows with the batch size until the GPU is saturated; give a large GPU a large
 :code:`--T` (the solver splits the batch into chunks that fit the free device memory).
 
+Results
+=======
+Run on a AMD EPYC 7662 64 Core with 4x NVIDIA A100-SXM4-40GB
+
+CPU:
+case9241pegase: 9241 buses, 37655 Ybus nonzeros | NVIDIA A100-SXM4-40GB, 40326 MB
+  cpu nr_klu  T=  1024:      609.4 ms      1680.4 PF/s   iterations 5-5
+  cpu nr_klu  T=  4096:     4553.0 ms       899.6 PF/s   iterations 5-5
+
+GPU:
+python -m tests.benchmark.benchmark_gpu_throughput --T 4096 8192 16384 --skip-cpu
+case9241pegase: 9241 buses, 37655 Ybus nonzeros | NVIDIA A100-SXM4-40GB, 40326 MB
+  gpu lean: solver built in 0.46 s, 1316596 multiply-subtracts in 254 levels
+  gpu lean   T=  4096:      678.0 ms      6041.2 PF/s   iterations 5-5   converged 4096/4096   chunk 4096   max |dV| vs cpu 1.9e-11
+  gpu lean   T=  8192:     1194.3 ms      6859.5 PF/s   iterations 5-5   converged 8192/8192   chunk 8192   max |dV| vs cpu 1.9e-11
+  gpu lean   T= 16384:     2399.9 ms      6827.0 PF/s   iterations 5-5   converged 16384/16384   chunk 8192   max |dV| vs cpu 1.9e-11
+
+GPU mixed precision:
+python -m tests.benchmark.benchmark_gpu_throughput --T 4096 8192 16384 --skip-cpu --precision mixed
+case9241pegase: 9241 buses, 37655 Ybus nonzeros | NVIDIA A100-SXM4-40GB, 40326 MB
+  gpu lean: solver built in 0.46 s, 1316596 multiply-subtracts in 254 levels
+  gpu lean   T=  4096:      595.1 ms      6883.4 PF/s   iterations 5-5   converged 4096/4096   chunk 4096   max |dV| vs cpu 1.9e-11
+  gpu lean   T=  8192:     1241.3 ms      6599.5 PF/s   iterations 5-5   converged 8192/8192   chunk 4096   max |dV| vs cpu 1.9e-11
+  gpu lean   T= 16384:     2191.1 ms      7477.5 PF/s   iterations 5-5   converged 16384/16384   chunk 5472   max |dV| vs cpu 1.9e-11
+
+mixed precision gains more advantages for consumer systems, but the A100 runs double precision at full speed.
+
 References
 ==========
 

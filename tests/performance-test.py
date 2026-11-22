@@ -41,7 +41,7 @@ if os.environ.get("P3S_BENCH_CUDA") == "1":
         from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 
         _HAS_CUDA = True
-    except (ImportError, FileNotFoundError):
+    except (ImportError, OSError):  # OSError: a CUDA library (e.g. libcudss) not loadable
         _HAS_CUDA = False
 
 

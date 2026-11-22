@@ -10,9 +10,14 @@ shared networks, per operating point and end-to-end:
   * scipy loop         -- NewtonPowerflow.calculate x T               (CPU baseline)
   * C++ batch (1 thr)  -- NewtonPowerflowCpp.calculate_timeseries_cpp, n_threads=1
   * C++ batch (N thr)  -- ... n_threads=0 (all cores)
-  * GPU batch          -- NewtonPowerflowCuda.calculate_timeseries_cuda  (if CUDA)
+  * GPU batch          -- NewtonPowerflowCuda.calculate_timeseries_cudss (if CUDA),
+                          linear solver picked with --gpu-backend (default: lean kernel)
 
 Newton-family methods (scipy / C++ / GPU) run on case9241pegase (PV+slack).
+
+The C++ and GPU solvers cache their setup (KLU symbolic analysis; kernel compilation and
+LU plan) across calls, so each runs one untimed warm-up solve before the timed ones: the
+smallest T would otherwise carry that one-off cost (seconds on the GPU).
 
 Run as a script:
     python tests/benchmark_batched.py --case case9241pegase --methods pp,p3s cpp --T 64 256 1024
@@ -62,7 +67,7 @@ if os.environ.get("P3S_BENCH_CUDA") == "1":
         from p3s.cuda.NewtonPowerflowCuda import NewtonPowerflowCUDA
 
         _HAS_CUDA = True
-    except (ImportError, FileNotFoundError):
+    except (ImportError, OSError):  # OSError: a CUDA library (e.g. libcudss) not loadable
         _HAS_CUDA = False
 
 warnings.filterwarnings("ignore", message="Matrix is exactly singular")
@@ -77,6 +82,8 @@ class MethodResults(TypedDict):
     results: NotRequired[list[list[list[complex | float | int]] | None]]
     max_vm_error: list[float | int | None]
     errors: list[Exception]
+    backend: NotRequired[str]  # GPU only: linear solver of the Newton step
+    precision: NotRequired[str]  # GPU only: factorization precision
 
 
 class BenchmarkResults(TypedDict):
@@ -255,6 +262,20 @@ def parse_args():
         help="Job ID for output file naming",
     )
     parser.add_argument(
+        "--gpu-backend",
+        type=str,
+        choices=["lean", "cudss", "rf", "qr"],
+        default="lean",
+        help="Linear solver of the GPU Newton step (default: lean, the batched LU kernel)",
+    )
+    parser.add_argument(
+        "--gpu-precision",
+        type=str,
+        choices=["double", "mixed"],
+        default="double",
+        help="Factorization precision of the lean GPU backend (default: double)",
+    )
+    parser.add_argument(
         "--drop-results",
         "-dr",
         action="store_true",
@@ -316,6 +337,21 @@ def run_pp_benchmark(net: pandapowerNet, timesteps: list[int]) -> MethodResults:
     return result
 
 
+_WARMUP_T = 64
+
+
+def _warm_up(net: pandapowerNet, solve) -> None:
+    """One untimed solve of a small batch, so one-off setup stays out of the timings.
+
+    A failure is ignored here: the timed calls run into it again and record it.
+    """
+    ts, _ = _make_timeseries(net, _WARMUP_T, seed=1)
+    try:
+        solve(ts)
+    except Exception:
+        pass
+
+
 def run_p3s_benchmark(net: pandapowerNet, timesteps: list[int]) -> MethodResults:
     """Run p3s Newton benchmark and return timing results per T."""
     result: MethodResults = MethodResults(
@@ -365,6 +401,7 @@ def run_cpp_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int) 
     )
 
     cpp = NewtonPowerflowCpp(net)
+    _warm_up(net, lambda ts: cpp.calculate_timeseries_cpp(net, ts, n_threads=n_threads))
 
     for T in timesteps:
         ts, scale = _make_timeseries(net, T)
@@ -385,8 +422,15 @@ def run_cpp_benchmark(net: pandapowerNet, timesteps: list[int], n_threads: int) 
     return result
 
 
-def run_gpu_benchmark(net: pandapowerNet, timesteps: list[int]) -> MethodResults:
-    """Run GPU benchmark and return timing results per T."""
+def run_gpu_benchmark(
+    net: pandapowerNet, timesteps: list[int], backend: str = "lean", precision: str = "double"
+) -> MethodResults:
+    """Run GPU benchmark and return timing results per T.
+
+    ``backend`` is the linear solver of the device-resident Newton solver: ``"lean"`` (the
+    batched static-pivot LU kernel, default), ``"cudss"``, ``"rf"`` or ``"qr"``.
+    ``precision`` (``"double"`` / ``"mixed"``) only affects the lean backend.
+    """
     if not _HAS_CUDA:
         return MethodResults(
             status="not_available",
@@ -402,15 +446,21 @@ def run_gpu_benchmark(net: pandapowerNet, timesteps: list[int]) -> MethodResults
         results=[],
         max_vm_error=[],
         errors=[],
+        backend=backend,
+        precision=precision,
     )
 
     gpu = NewtonPowerflowCUDA(net)
+    print(f"GPU benchmark: backend={backend}, precision={precision}", flush=True)
+    _warm_up(
+        net, lambda ts: gpu.calculate_timeseries_cudss(net, ts, tolerance=1e-6, backend=backend, precision=precision)
+    )
 
     for T in timesteps:
         ts, scale = _make_timeseries(net, T)
         try:
             t0 = time.perf_counter()
-            res = gpu.calculate_timeseries_cudss(net, ts, tolerance=1e-6)
+            res = gpu.calculate_timeseries_cudss(net, ts, tolerance=1e-6, backend=backend, precision=precision)
             elapsed = time.perf_counter() - t0
             result["time_ms"].append(elapsed * 1000)
             result["results"].append(res.tolist())
@@ -428,6 +478,8 @@ def benchmark_newton(
     net: pandapowerNet,
     methods: list[str],
     timesteps: list[int],
+    gpu_backend: str = "lean",
+    gpu_precision: str = "double",
 ) -> BenchmarkResults:
     """Run Newton-family benchmarks and return structured results."""
     net.trafo.shift_degree = 0.0
@@ -447,7 +499,7 @@ def benchmark_newton(
         "p3s": run_p3s_benchmark,
         "cpp-1thr": partial(run_cpp_benchmark, n_threads=1),
         "cpp-Nthr": partial(run_cpp_benchmark, n_threads=0),
-        "gpu": run_gpu_benchmark,
+        "gpu": partial(run_gpu_benchmark, backend=gpu_backend, precision=gpu_precision),
     }
 
     for m in methods:
@@ -519,7 +571,9 @@ if __name__ == "__main__":
 
         newton_results = benchmark_cpp_multicore(test_case, t_list, num_threads)
     elif set(methods_to_run) & {"pp", "p3s", "cpp", "cpp-1thr", "cpp-Nthr", "gpu"}:
-        newton_results = benchmark_newton(test_case, methods_to_run, t_list)
+        newton_results = benchmark_newton(
+            test_case, methods_to_run, t_list, gpu_backend=args.gpu_backend, gpu_precision=args.gpu_precision
+        )
     else:
         print("could not run benchmark")
         sys.exit(4)
