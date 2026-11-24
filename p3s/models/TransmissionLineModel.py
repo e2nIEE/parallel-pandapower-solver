@@ -34,9 +34,7 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     # 1) Calculate B
     B = 2 * C * f_hz * np.pi * 1e-9 * Z_N
 
-    # 2) Series admittance in p.u. (named Z_sr for history, it is 1 / Z). ``parallel``
-    #    identical systems in parallel multiply every admittance, the series one included
-    #    (pandapower: build_branch._calc_branch_values_from_line).
+    # 2) Series admittance in p.u. (named Z_sr?!)
     x_s = 1j * X * length / Z_N
     Z_sr = parallel / (R * length / Z_N + x_s)
 
@@ -50,7 +48,6 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     Y_ft = -Z_sr
     Y_tf = -Z_sr
 
-    # DC susceptance (DC initialisation), also scaled by ``parallel``
     return Y_ff, Y_ft, Y_tf, Y_tt, parallel / x_s
 
 
