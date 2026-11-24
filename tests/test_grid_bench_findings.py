@@ -544,6 +544,28 @@ def test_trafo_rated_voltage_differs_from_bus(vn_hv_kv, vn_lv_kv):
     _assert_matches_pandapower(_net_trafo(vn_hv_kv, vn_lv_kv))
 
 
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+@pytest.mark.parametrize(
+    "vn_hv_kv, vn_lv_kv, df",
+    [
+        (110.0, 20.0, 1.0),
+        (115.0, 20.0, 1.0),
+        (110.0, 19.0, 1.0),
+        (110.0, 20.0, 0.8),
+        (110.0, 20.0, 2.4),
+        (115.0, 21.0, 2.4),
+    ],
+)
+def test_trafo_loading_uses_rated_voltages_and_df(solve, vn_hv_kv, vn_lv_kv, df):
+    net = _net_trafo(vn_hv_kv, vn_lv_kv, df=df)
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    solve(net)
+    cols = ["i_hv_ka", "i_lv_ka", "loading_percent"]
+    np.testing.assert_allclose(net.res_trafo[cols], ref.res_trafo[cols], rtol=0, atol=1e-6)
+
+
 RATIO_TAP = dict(tap_changer_type="Ratio", tap_neutral=0, tap_min=-5, tap_max=5, tap_step_percent=1.25)
 
 
