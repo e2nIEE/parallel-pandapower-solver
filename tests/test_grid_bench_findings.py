@@ -948,3 +948,39 @@ def test_tap_changer_types_match_pandapower(tap_changer_type, tap):
     npf = NewtonPowerflow(net)
     np.testing.assert_allclose(npf._YBus.toarray(), ref._ppc["internal"]["Ybus"].toarray(), rtol=1e-10, atol=1e-10)
     _assert_matches_pandapower(_net_two_trafos(tap_changer_type, **tap))
+
+
+# --- 9./10. lines: parallel systems and line conductance ------------------------------------
+
+
+def _net_parallel_line(parallel: int = 1, g_us_per_km: float = 0.0, n_single: int = 1) -> pandapowerNet:
+    """Two 220 kV lines in series feeding a load and a PV gen. The first line has ``parallel``
+    systems (or is drawn as ``n_single`` separate lines) and an optional conductance."""
+    net = create_empty_network(sn_mva=100.0)
+    b = [create_bus(net, vn_kv=220.0) for _ in range(3)]
+    create_ext_grid(net, b[0], vm_pu=1.02)
+    kw = dict(length_km=40.0, r_ohm_per_km=0.05, x_ohm_per_km=0.4, c_nf_per_km=12.0, max_i_ka=1.0)
+    for _ in range(n_single):
+        create_line_from_parameters(net, b[0], b[1], parallel=parallel, g_us_per_km=g_us_per_km, **kw)
+    create_line_from_parameters(net, b[1], b[2], **kw)
+    create_gen(net, b[2], p_mw=50.0, vm_pu=1.01)
+    create_load(net, b[1], p_mw=250.0, q_mvar=80.0)
+    return net
+
+
+@SOLVERS
+@pytest.mark.parametrize("parallel", [1, 2, 3])
+@pytest.mark.parametrize("g_us_per_km", [0.0, 0.5])
+def test_line_parallel_and_conductance_match_pandapower(parallel, g_us_per_km, solve):
+    net = _net_parallel_line(parallel, g_us_per_km)
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus", ["vm_pu", "va_degree"])
+    _assert_res_matches(net, ref, "res_line", ["p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar", "pl_mw"])
+
+
+@pytest.mark.parametrize("k", [2, 3])
+def test_parallel_line_equals_k_single_lines(k):
+    _, v_parallel = _solve_p3s(_net_parallel_line(parallel=k))
+    _, v_single = _solve_p3s(_net_parallel_line(n_single=k))
+    np.testing.assert_allclose(v_parallel, v_single, rtol=1e-10, atol=1e-12)
