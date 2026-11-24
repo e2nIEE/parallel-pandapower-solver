@@ -31,10 +31,6 @@ Root causes, and the benchmark cases each one broke:
 8. The trafo3w DC phase-shift injection dropped the star-node elimination for windings whose
    susceptances sum to a negative value (a ``b_sum > 0`` guard), so the DC init was inconsistent
    with the B-matrix and the Newton solve diverged on a large net.
-9. Lines with ``parallel = k > 1``: the pi model divided the series admittance by k instead of
-   multiplying it (a factor k**2 off) -- case118 (two double lines; bus 9 off by 0.032 pu).
-10. Line conductance ``g_us_per_km`` was added to the per-unit shunt admittance in siemens,
-    without the base-impedance scaling the capacitance gets.
 
 The tests for 1-6 were checked to be passable: with the matching workaround applied to
 the net (drop oos gens, slack gen -> ext_grid, fuse/drop switched buses, re-express the
@@ -954,10 +950,6 @@ def _net_parallel_line(parallel: int = 1, g_us_per_km: float = 0.0, n_single: in
 @pytest.mark.parametrize("parallel", [1, 2, 3])
 @pytest.mark.parametrize("g_us_per_km", [0.0, 0.5])
 def test_line_parallel_and_conductance_match_pandapower(parallel, g_us_per_km, solve):
-    """9. ``parallel = k`` multiplies every pi-model admittance by k (pandapower:
-    ``build_branch._calc_branch_values_from_line``); the series admittance used to be divided
-    by k instead (case118: bus 9 off by 0.032 pu). 10. ``g_us_per_km`` needs the same per-unit
-    scaling as the capacitance; it used to be added in siemens."""
     net = _net_parallel_line(parallel, g_us_per_km)
     ref = _reference_pp(net)
     solve(net)
@@ -967,7 +959,6 @@ def test_line_parallel_and_conductance_match_pandapower(parallel, g_us_per_km, s
 
 @pytest.mark.parametrize("k", [2, 3])
 def test_parallel_line_equals_k_single_lines(k):
-    """9. One line with ``parallel = k`` is electrically the same as k separate lines."""
     _, v_parallel = _solve_p3s(_net_parallel_line(parallel=k))
     _, v_single = _solve_p3s(_net_parallel_line(n_single=k))
     np.testing.assert_allclose(v_parallel, v_single, rtol=1e-10, atol=1e-12)
