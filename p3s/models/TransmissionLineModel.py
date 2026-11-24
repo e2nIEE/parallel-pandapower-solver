@@ -40,8 +40,9 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     x_s = 1j * X * length / Z_N
     Z_sr = parallel / (R * length / Z_N + x_s)
 
-    # 3) Total shunt admittance, split equally at both ends
-    Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
+    # 3) Total shunt admittance in p.u., split equally at both ends. G [µS/km] needs the
+    #    same Z_N scaling as B (pandapower: g = g_us_per_km * 1e-6 * baseR * length * parallel)
+    Y_sr = 0.5 * (G * 1e-6 * Z_N + 1j * B) * length * parallel
 
     # 4) Calculate admittances
     Y_ff = Z_sr + Y_sr
@@ -81,8 +82,8 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     x_s = 1j * X * length / Z_N
     Z_sr = parallel / (R * length / Z_N + x_s)  # series admittance in p.u., see pi_model
 
-    # 3) Total shunt admittance, split equally at both ends
-    Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
+    # 3) Total shunt admittance in p.u., split equally at both ends (see pi_model)
+    Y_sr = 0.5 * (G * 1e-6 * Z_N + 1j * B) * length * parallel
 
     # T-Model-Branch
     Z1 = Z2 = Z_sr / 2
