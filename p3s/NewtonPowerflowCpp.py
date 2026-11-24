@@ -357,10 +357,10 @@ class NewtonPowerflow:
             res_trafo["ql_mvar"].to_numpy(copy=False)[:] = trafo_power_from.imag + trafo_power_to.imag
 
             loading_percent = np.maximum(
-                trafo_currents_from.values * trafos.voltages_from.values * np.sqrt(3),
-                trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
+                trafo_currents_from.values * net.trafo.vn_hv_kv.values * np.sqrt(3),
+                trafo_currents_to.values * net.trafo.vn_lv_kv.values * np.sqrt(3),
             )
-            res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
+            res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva / net.trafo.df * 100
 
         # -- calculate trafo3w results --
         if "trafo3w" in self._ybus_elements and "trafo3w" in net and len(net.trafo3w):

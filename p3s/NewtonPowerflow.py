@@ -366,10 +366,10 @@ class NewtonPowerflow:
             #                             trafo_currents_to.values * res_trafo['vm_lv_pu'].values)
 
             loading_percent = np.maximum(
-                trafo_currents_from.values * trafos.voltages_from.values * np.sqrt(3),
-                trafo_currents_to.values * trafos.voltages_to.values * np.sqrt(3),
+                trafo_currents_from.values * net.trafo.vn_hv_kv.values * np.sqrt(3),
+                trafo_currents_to.values * net.trafo.vn_lv_kv.values * np.sqrt(3),
             )
-            res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva * 100
+            res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva / net.trafo.df * 100
 
         # -- calculate ward results --
         # res_ward reports the TWO halves recombined, as pandapower does:
