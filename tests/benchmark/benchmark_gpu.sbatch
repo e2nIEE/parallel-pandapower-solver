@@ -23,9 +23,15 @@ OUTPUT_DIR+="/${SLURM_ARRAY_JOB_ID}"
 
 # Configuration
 T_VALUES=${T_VALUES:-"64 256 1024 2048 4096 8760 17520 35040"}
+# Linear solver of the GPU Newton step: lean (batched LU kernel, default) | cudss | rf | qr
+GPU_BACKEND=${GPU_BACKEND:-"lean"}
+# Factorization precision of the lean kernel: double | mixed
+GPU_PRECISION=${GPU_PRECISION:-"double"}
 
 # Load modules and activate conda environment
-CUDA_HOME=/usr/local/cuda-12.4/
+export CUDA_HOME=/usr/local/cuda-12.4
+# pycuda compiles the solver kernels at run time and needs nvcc on PATH
+export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 module load gcc12
 
@@ -43,6 +49,7 @@ CASE_FOR_WORKER="${CASE_NAMES[SLURM_ARRAY_TASK_ID]}"
 echo "=== Job configuration ==="
 echo "Total workers: $SLURM_ARRAY_TASK_COUNT"
 echo "T values: ${T_VALUES}"
+echo "GPU backend: ${GPU_BACKEND} (precision ${GPU_PRECISION})"
 echo "Output Directory: ${OUTPUT_DIR}"
 
 echo "=== SLURM Job Array ==="
@@ -50,8 +57,8 @@ echo "Job ID: ${SLURM_ARRAY_JOB_ID}"
 echo "Task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "GPUs: ${SLURM_JOB_GPUS}"
 echo "Cases: ${CASE_FOR_WORKER}"
-
-echo "=== Starting benchmark ==="
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader || true
+echo "nvcc: $(command -v nvcc || echo NOT FOUND)"
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
@@ -59,21 +66,21 @@ mkdir -p "${OUTPUT_DIR}"
 # Export CUDA_VISIBLE_DEVICES based on SLURM
 export CUDA_VISIBLE_DEVICES=0
 
-# Run benchmark
-cd "${p3s_DIR:-$(dirname $(dirname $(readlink -f $0)))}"
-
+echo "=== Starting benchmark ==="
 
 # Test specific method on this case
 ${PYTHONBIN}/bin/python ${BASE_PATH}/tests/benchmark/benchmark_batched.py \
     --case "$CASE_FOR_WORKER" \
-    --method "gpu" \
+    --methods "gpu" \
+    --gpu-backend "$GPU_BACKEND" \
+    --gpu-precision "$GPU_PRECISION" \
     --T $T_VALUES \
     --output-dir "$OUTPUT_DIR" \
     --drop-results \
     --job-id "$SLURM_ARRAY_JOB_ID" || EXIT_CODE=$?
 
 if [ ${EXIT_CODE} -ne 0 ]; then
-    echo "=== Failed processing case: $CASE_NAME ==="
+    echo "=== Failed processing case: ${CASE_FOR_WORKER} ==="
 fi
 
 echo "=== Benchmark completed with exit code: ${EXIT_CODE} ==="

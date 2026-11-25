@@ -120,7 +120,11 @@ A CUDA-accelerated Newton solver. Batched solves run fully on the GPU:
 
 `voltages` has shape `(n_bus, T)`. The whole Newton iteration (mismatch, Jacobian,
 factorization, solve, line search) stays on the device; the batch is split into chunks that
-fit the free GPU memory (`max_chunk` caps the chunk size further).
+fit the free GPU memory (`max_chunk` caps the chunk size further). The injections and
+the resulting voltages move between host and device through a small pinned (page-locked)
+buffer with multi-threaded host copies, several times faster than plain copies on a
+fast-bus GPU; `npf._get_cudss_solver().pinned_transfers = False` switches back to plain
+copies.
 
 The linear solver of the Newton step is selected with the `backend` argument:
 

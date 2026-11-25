@@ -51,6 +51,7 @@ from pycuda.compiler import SourceModule
 from p3s.cuda import _ctx  # noqa: F401  (retains the CUDA primary context; cuDSS-safe)
 from p3s.cuda.lean_lu_plan import LeanLUPlan, build_lean_lu_plan
 from p3s.cuda.polar_topology import PolarTopology, build_polar_topology, jacobian_values_host
+from p3s.timeseries import usable_cpus
 
 _F64 = 8
 _C128 = 16
@@ -114,6 +115,119 @@ def _copy_columns(dev: int, host: NDArray, col0: int, B: int, to_device: bool):
     cp.width_in_bytes = B * item
     cp.height = host.shape[0]
     cp(aligned=False)
+
+
+# host blocks below this size are copied directly (pageable), larger ones through _HostStage
+_STAGE_MIN_BYTES = 16 << 20
+
+
+class _HostStage:
+    """Pinned (page-locked) staging for the large per-chunk host <-> device transfers.
+
+    A plain copy from / to pageable memory runs at a fraction of the bus bandwidth: the
+    driver bounces it through its own small pinned buffer, single-threaded, and a fresh
+    result array additionally takes its first-touch page faults inside that copy. Here the
+    rows of the ``(rows, B)`` block are moved in slabs through two halves of a fixed pinned
+    ring: worker threads copy slabs between the caller's array and pinned memory (page
+    faults then spread over cores) while the DMA engine moves the other half. Pinned
+    memory stays bounded at ``2 * threads * slab_bytes`` regardless of the transfer size.
+    """
+
+    slab_bytes = 4 << 20
+
+    def __init__(self):
+        self.threads = max(1, min(8, usable_cpus()))
+        self._mem = None
+        self._pool = None
+        self._stream = None
+
+    def _ring(self, slot_bytes: int):
+        need = 2 * self.threads * slot_bytes
+        if self._mem is None or self._mem.nbytes < need:
+            self._mem = None
+            self._mem = cuda.pagelocked_empty(need, np.uint8)
+        if self._pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            self._pool = ThreadPoolExecutor(self.threads, thread_name_prefix="p3s-stage")
+            self._stream = cuda.Stream()
+        return self._mem
+
+    def _plan(self, host: NDArray, B: int):
+        """Slabs of whole rows and the pinned slot view of each ring position."""
+        rows, item = host.shape[0], host.itemsize
+        row_bytes = B * item
+        per = max(1, self.slab_bytes // row_bytes)
+        slot_bytes = per * row_bytes
+        mem = self._ring(slot_bytes)
+        n_slots = 2 * self.threads
+        slots = [mem[s * slot_bytes : (s + 1) * slot_bytes].view(host.dtype).reshape(per, B) for s in range(n_slots)]
+        slabs = [(r, min(rows, r + per)) for r in range(0, rows, per)]
+        return slabs, slots, row_bytes
+
+    def htod(self, dev: int, host: NDArray, col0: int, B: int):
+        """Columns ``[col0, col0 + B)`` of ``host`` (rows, B_total) -> device ``(rows, B)``."""
+        slabs, slots, row_bytes = self._plan(host, B)
+        src = host[:, col0 : col0 + B]
+        k_half = self.threads
+        events: list = [None] * len(slots)
+
+        def stage(k):
+            r0, r1 = slabs[k]
+            np.copyto(slots[k % len(slots)][: r1 - r0], src[r0:r1])
+            return k
+
+        for first in range(0, len(slabs), k_half):
+            ks = range(first, min(first + k_half, len(slabs)))
+            for k in ks:  # the DMA that last read this slot (two rounds ago) must be done
+                ev = events[k % len(slots)]
+                if ev is not None:
+                    ev.synchronize()
+            for k in self._pool.map(stage, ks):
+                r0, r1 = slabs[k]
+                slot = slots[k % len(slots)]
+                cuda.memcpy_htod_async(dev + r0 * row_bytes, slot[: r1 - r0], self._stream)
+                ev = cuda.Event()
+                ev.record(self._stream)
+                events[k % len(slots)] = ev
+        self._stream.synchronize()
+
+    def dtoh(self, dev: int, host: NDArray, col0: int, B: int):
+        """Device ``(rows, B)`` -> columns ``[col0, col0 + B)`` of ``host`` (rows, B_total)."""
+        slabs, slots, row_bytes = self._plan(host, B)
+        dst = host[:, col0 : col0 + B]
+        k_half = self.threads
+        events: dict[int, cuda.Event] = {}
+
+        def fetch(k):
+            r0, r1 = slabs[k]
+            cuda.memcpy_dtoh_async(slots[k % len(slots)][: r1 - r0], dev + r0 * row_bytes, self._stream)
+            ev = cuda.Event()
+            ev.record(self._stream)
+            events[k] = ev
+
+        def unstage(k):
+            r0, r1 = slabs[k]
+            np.copyto(dst[r0:r1], slots[k % len(slots)][: r1 - r0])
+
+        for k in range(min(2 * k_half, len(slabs))):  # both halves in flight
+            fetch(k)
+        for first in range(0, len(slabs), k_half):
+            ks = range(first, min(first + k_half, len(slabs)))
+            futures = []
+            for k in ks:
+                events.pop(k).synchronize()
+                futures.append(self._pool.submit(unstage, k))
+            for f in futures:
+                f.result()
+            for k in ks:  # this half is free again: fetch two rounds ahead into it
+                if k + 2 * k_half < len(slabs):
+                    fetch(k + 2 * k_half)
+
+    def free(self):
+        if self._pool is not None:
+            self._pool.shutdown()
+        self._mem = self._pool = self._stream = None
 
 
 class _Buffers:
@@ -228,6 +342,10 @@ class PolarNewtonSolverCUDA:
         # still iterating, they are finished by nr_klu on the CPU, starting from the GPU's
         # current iterate (needs the fallback; 0 = iterate everything on the GPU).
         self.cpu_handoff = 32
+        # Move the large per-chunk arrays (injections, start voltages, results) through a
+        # bounded pinned staging ring with multi-threaded host copies (see _HostStage);
+        # False = plain pageable copies.
+        self.pinned_transfers = True
         # Pivot perturbation of the "rf" backend (set per call on the contingency path).
         self._numeric_zero = 0.0
         self._numeric_boost = 0.0
@@ -236,6 +354,7 @@ class PolarNewtonSolverCUDA:
 
         self._compile_kernels()
         self._buf = _Buffers()
+        self._stage = _HostStage()
         self._lib: dict = {}  # library backend objects by batch size
         self._cpu = None  # lazily built nr_klu.Solver (fallback)
 
@@ -470,6 +589,7 @@ class PolarNewtonSolverCUDA:
     def free(self):
         """Release the device memory held for chunks and library backends."""
         self._buf.free()
+        self._stage.free()
         for lib in self._lib.values():
             lib.free()
         self._lib = {}
@@ -691,7 +811,9 @@ class PolarNewtonSolverCUDA:
 
         # problem data
         def put(dev, a):
-            if a.ndim == 1 or ch.col0 is None:
+            if a.ndim == 2 and self._staged(a, B):
+                self._stage.htod(dev, a, ch.col0 or 0, B)
+            elif a.ndim == 1 or ch.col0 is None:
                 cuda.memcpy_htod(dev, a)
             else:
                 _copy_columns(dev, a, ch.col0, B, to_device=True)
@@ -726,6 +848,11 @@ class PolarNewtonSolverCUDA:
             _grid(n * B), (_BLOCK, 1, 1), b["V0"], b["v0_shared"], b["Vm"], b["Va"], b["cs"], b["sn"], n, S, B
         )
         return b
+
+    def _staged(self, a: NDArray, B: int) -> bool:
+        """Whether a ``(rows, B_total)`` host block of ``B`` columns goes through the pinned
+        stage: only big ones, where the bandwidth gain outweighs the slab bookkeeping."""
+        return self.pinned_transfers and a.shape[0] * B * a.itemsize >= _STAGE_MIN_BYTES
 
     def _expand_Y(self, b: dict, stamp):
         """Per-system Ybus on the device: base values minus the sparse outage stamps."""
@@ -926,15 +1053,16 @@ class PolarNewtonSolverCUDA:
             _grid(t.n * B), (_BLOCK, 1, 1), b["Vm"], b["cs"], b["sn"], b["V"], t.n, b["S"], B
         )
         if out is None:
-            V = np.empty((t.n, B), dtype=np.complex128)
-            cuda.memcpy_dtoh(V, b["V"])
+            V_full, col0 = np.empty((t.n, B), dtype=np.complex128), 0
         else:  # straight into the caller's result, columns [col0, col0 + B)
             V_full, col0 = out
-            if V_full.shape[1] == B:
-                cuda.memcpy_dtoh(V_full, b["V"])
-            else:
-                _copy_columns(b["V"], V_full, col0, B, to_device=False)
-            V = V_full[:, col0 : col0 + B]
+        if self._staged(V_full, B):
+            self._stage.dtoh(b["V"], V_full, col0, B)
+        elif V_full.shape[1] == B:
+            cuda.memcpy_dtoh(V_full, b["V"])
+        else:
+            _copy_columns(b["V"], V_full, col0, B, to_device=False)
+        V = V_full[:, col0 : col0 + B]
         iters = np.empty(B, dtype=np.int32)
         cuda.memcpy_dtoh(iters, b["iters"])
         return {"V": V, "iterations": iters, "converged": status == _CONVERGED, "handed_off": tail, "it": it}

@@ -11,12 +11,6 @@ from numpy.typing import NDArray
 from pandapower import LoadflowNotConverged, pandapowerNet
 
 from p3s.cuda import _ctx  # noqa: F401 (retains the CUDA primary context; cuDSS-safe)
-
-try:
-    from p3s.cuda.cudss_batch import CudssBatch as Cuda_solver
-except (FileNotFoundError, ImportError):
-    from p3s.cuda.cusolver_rf_batch import CusolverRfBatch as Cuda_solver  # type: ignore[assignment]
-
 from p3s.NewtonPowerflow import NewtonPowerflow
 from p3s.timeseries import build_sbus_matrix, dc_initial_voltage
 
@@ -24,6 +18,23 @@ if TYPE_CHECKING:
     from p3s.cuda.nr_polar_solver import PolarNewtonSolverCUDA
 
 logger = logging.getLogger(__name__)
+
+
+def _batch_lu_solver_class():
+    """Batched sparse LU of the legacy ``*_cuda`` methods: cuDSS if loadable, else cuSolverRf.
+
+    Imported on first use, not at module import: the cuDSS wrapper raises ``OSError`` when
+    ``libcudss`` is missing, and the ``*_cudss`` methods (lean backend) must keep working
+    without cuDSS installed.
+    """
+    try:
+        from p3s.cuda.cudss_batch import CudssBatch
+
+        return CudssBatch
+    except (ImportError, OSError):
+        from p3s.cuda.cusolver_rf_batch import CusolverRfBatch
+
+        return CusolverRfBatch
 
 
 def _sort_csr_pattern(Jp: NDArray, Jj: NDArray):
@@ -100,7 +111,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
         Jj0 = np.ascontiguousarray(Jj, dtype=np.int32)
         Jj_sorted, perm = _sort_csr_pattern(Jp, Jj0)
 
-        solver = Cuda_solver(Jp, Jj_sorted, batch_size=1)
+        solver = _batch_lu_solver_class()(Jp, Jj_sorted, batch_size=1)
         solver.symbolic_setup(np.ascontiguousarray(Jx0, dtype=np.float64)[perm])
 
         i = 0
@@ -352,7 +363,7 @@ class NewtonPowerflowCUDA(NewtonPowerflow):
             for c in range(B):
                 mismatch[c] = self._calc_mismatch(sbus_chunk[:, c], V[:, c])
 
-            solver = Cuda_solver(Jp, Jj_sorted, batch_size=B, reorder=reorder)
+            solver = _batch_lu_solver_class()(Jp, Jj_sorted, batch_size=B, reorder=reorder)
             solver.symbolic_setup(np.ascontiguousarray(Jx0, dtype=np.float64)[perm])
 
             converged_mask = np.zeros(B, dtype=bool)
