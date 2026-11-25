@@ -118,7 +118,7 @@ class ContingencyBatch:
         return np.stack([c.Yx for c in self.cases], axis=1)
 
 
-def _branch_stamps(npf: NewtonPowerflow):
+def _branch_stamps(npf: NewtonPowerflow, net):
     """Yield (from_bus, to_bus, Yff, Yft, Ytf, Ytt, table, row_idx) for every branch
     p3s modelled, reading the per-branch stamp straight off the element models.
 
@@ -130,7 +130,7 @@ def _branch_stamps(npf: NewtonPowerflow):
     # The models stamp on bus positions; the Ybus lives on nodes (buses fused by closed bus-bus
     # switches share one, unsupplied buses have none -- p3s.topology).
     node_of_bus = npf._topology.node_of_bus
-    for table in ("line", "trafo"):
+    for table in ("line", "trafo", "impedance"):
         model = elements.get(table)
         if model is None:
             continue
@@ -141,6 +141,8 @@ def _branch_stamps(npf: NewtonPowerflow):
         ytf = np.asarray(model._Y_tf, dtype=complex)  # type: ignore[union-attr]
         ytt = np.asarray(model._Y_tt, dtype=complex)  # type: ignore[union-attr]
         for i in range(len(fb)):
+            if not net[table].in_service.iloc[i]:
+                continue
             if fb[i] < 0 or tb[i] < 0:
                 continue  # unsupplied: not in the Ybus
             yield table, i, int(fb[i]), int(tb[i]), yff[i], yft[i], ytf[i], ytt[i]
@@ -289,9 +291,9 @@ class ContingencyCaseGenerator:
         records = []  # list of dict(group, entries=[(csr_pos, value), ...])
         net = self.net
         fb_l, tb_l, grp_l, pos_l, val_l = [], [], [], [], []
-        for table, i, fb, tb, yff, yft, ytf, ytt in _branch_stamps(self._npf):
+        for table, i, fb, tb, yff, yft, ytf, ytt in _branch_stamps(self._npf, net):
             group = None
-            if "outage_group" in net[table].columns:
+            if table in ("line", "trafo") and "outage_group" in net[table].columns:
                 # element model row i corresponds to net[table] row i (same order)
                 group = net[table]["outage_group"].iloc[i]
                 if group is not None and (isinstance(group, float) and np.isnan(group)):
