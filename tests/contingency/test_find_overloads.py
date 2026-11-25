@@ -73,6 +73,32 @@ def test_branch_loading_matches_pandapower(element):
     assert n_checked > 0, "no contingency columns were validated"
 
 
+@pytest.mark.parametrize("df_case", ["absent", "all_missing", "partially_missing"])
+def test_trafo_loading_missing_df_defaults_to_one(df_case):
+    net = _net_with_line_outages()
+    res = solve_contingencies_cpp(net, reslack_islands=False, init="flat")
+    if df_case == "absent":
+        net.trafo.drop(columns="df", inplace=True)
+    else:
+        net.trafo["df"] = np.nan
+        if df_case == "partially_missing":
+            net.trafo.iloc[1, net.trafo.columns.get_loc("df")] = 0.8
+
+    ref_net = copy.deepcopy(net)
+    if df_case == "absent":
+        ref_net.trafo["df"] = 1.0
+    else:
+        ref_net.trafo["df"] = ref_net.trafo["df"].fillna(1.0)
+    tab = compute_branch_loading(net, res, element="trafo")
+    expected = compute_branch_loading(ref_net, res, element="trafo")
+    np.testing.assert_allclose(tab.loading_percent, expected.loading_percent, equal_nan=True)
+    column = np.flatnonzero(res.converged)[0]
+    ref = _pandapower_reference(ref_net, res.groups[column])
+    np.testing.assert_allclose(tab.loading_percent[:, column], ref.res_trafo.loading_percent, rtol=0, atol=1e-6)
+    if df_case != "absent":
+        assert np.isnan(net.trafo["df"].iloc[0])
+
+
 def test_outaged_branches_report_zero_not_stale_flow():
     """The out-of-service branch must read exactly 0, not the intact-grid flow.
 

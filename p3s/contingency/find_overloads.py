@@ -222,9 +222,8 @@ def compute_branch_loading(net, res, element: str = "line", npf=None) -> BranchL
             rating = net.line["max_i_ka"].to_numpy(dtype=float)[:, None]
             loading = i_max / rating * 100.0
         else:
-            # Mirror _parse_results' trafo loading: apparent power vs the trafo MVA rating.
-            s_max = np.maximum(i_from * vn_from * sqrt3, i_to * vn_to * sqrt3)
-            loading = s_max / net.trafo["sn_mva"].to_numpy(dtype=float)[:, None] * 100.0
+            assert isinstance(mdl, TwoWindingTransformerModel)
+            loading = mdl.loading_percent(i_from, i_to)
 
     # -- zero the branches that are OUT in each column ------------------------------
     # yf/yt come from the intact grid, so without this an outaged line reports the flow it
