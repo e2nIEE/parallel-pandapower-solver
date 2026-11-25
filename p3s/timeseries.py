@@ -61,7 +61,8 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
     sn = net.sn_mva
     n_bus = pf._sBus.shape[0]
     # Every (element, variable) series contributes coef * (value - base) to the bus the
-    # element is connected to (loads -1/sn, sgen/gen +1/sn; q to the imaginary part).
+    # element is connected to (loads -1/sn, sgen/gen +1/sn, times scaling * in_service;
+    # q to the imaginary part).
     # Collect all contributions as one bus-major list and let a parallel kernel write each
     # output row once: the (n_bus, T) result is the only large array this touches.
     src: List = []
@@ -70,6 +71,14 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
         lookup = net[element]["_lookup"].to_numpy().astype(np.int64)  # node, -1 = unsupplied bus
         el = np.nonzero(lookup >= 0)[0]
         sign = -1.0 if element == "load" else 1.0
+        # Same weighting as the base injection in _setup_pf / voltage_sources: pandapower
+        # applies `scaling` on top of the (time-series) p_mw/q_mvar, and an out-of-service
+        # element injects nothing whatever its time-series says.
+        weight = np.ones(lookup.size)
+        if "scaling" in net[element]:
+            weight = weight * net[element].scaling.to_numpy(dtype=np.float64)
+        if "in_service" in net[element]:
+            weight = weight * net[element].in_service.to_numpy(dtype=bool)
         for variable, is_imag in (("p_mw", False), ("q_mvar", True)):
             if (element, variable) not in timeseries:
                 continue
@@ -81,7 +90,7 @@ def build_sbus_matrix(pf, net, timeseries) -> NDArray:
             bus.append(lookup[el])
             src.append(np.full(el.size, len(sources) - 1, dtype=np.int64))
             row.append(el)
-            coef.append(np.full(el.size, sign / sn))
+            coef.append(sign / sn * weight[el])
             base.append(base_v[el])
             imag.append(np.full(el.size, is_imag))
 

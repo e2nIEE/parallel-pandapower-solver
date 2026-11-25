@@ -277,6 +277,14 @@ class ContingencyCaseGenerator:
           ``_br_pos``                 : (B, 4) int  CSR data positions of the 4 stamp
                                         entries (ff, ft, tf, tt)
           ``_br_val``                 : (B, 4) complex  the stamp values at those positions
+          ``_br_live``                : (B,) bool  branch couples its two ends electrically
+
+        A branch with an open switch at one end (or out of service) is still modelled -- an
+        open-ended line keeps its charging stamp on the closed end, so outaging it must still
+        subtract that -- but its transfer admittances ``Y_ft``/``Y_tf`` are zero, so it is NOT
+        an edge of the connectivity graph. Counting it as one would let a cut-off radial feeder
+        look connected through its open tie switch: the feeder then stays unpinned, floats, and
+        Newton runs into ``max_iter`` on a singular Jacobian.
         """
         records = []  # list of dict(group, entries=[(csr_pos, value), ...])
         net = self.net
@@ -305,6 +313,7 @@ class ContingencyCaseGenerator:
         self._br_val = (
             np.asarray(val_l, dtype=np.complex128).reshape(-1, 4) if val_l else np.zeros((0, 4), dtype=np.complex128)
         )
+        self._br_live = (self._br_val[:, 1] != 0) | (self._br_val[:, 2] != 0)
         return records
 
     def _gen_z_by_bus(self) -> dict:
@@ -349,11 +358,12 @@ class ContingencyCaseGenerator:
         Vectorized: the base branch endpoint arrays (``_br_from``/``_br_to``) are constant,
         so we just drop the outaged rows with a boolean mask and build the adjacency in one
         scipy call -- no per-branch Python loop. Returns (labels (n_bus,), n_components).
+        Branches that do not couple their ends (``_br_live`` False) are no edges.
         """
         n = self.n_bus
         f, t = self._br_from, self._br_to
         if len(f):
-            keep: NDArray = np.ones(len(f), dtype=bool)
+            keep: NDArray = self._br_live.copy()
             if outaged:
                 keep[np.asarray(outaged, dtype=np.int64)] = False
             fk, tk = f[keep], t[keep]
@@ -454,23 +464,25 @@ class ContingencyCaseGenerator:
         graph vs. the graph with multi-edges collapsed. We use scipy on the simple graph.
         """
         n = self.n_bus
-        f, t = self._br_from, self._br_to
-        # collapse parallels: an edge with multiplicity > 1 is never a bridge
-        if len(f) == 0:
+        # Only live branches are edges (see _index_branches); a dead branch is never a bridge.
+        live = np.nonzero(self._br_live)[0]
+        if len(live) == 0:
             return set()
-        # multiplicity per undirected endpoint pair
+        f, t = self._br_from[live], self._br_to[live]
+        # multiplicity per undirected endpoint pair; an edge with multiplicity > 1 is never a bridge
         a = np.minimum(f, t)
         b = np.maximum(f, t)
         key = a.astype(np.int64) * n + b
-        _, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
+        _, first, inv, counts = np.unique(key, return_index=True, return_inverse=True, return_counts=True)
         mult = counts[inv]  # per-branch multiplicity
-        # Build the simple graph (unique edges) and find bridges via DFS low-link.
-        bridges_pair = _find_bridges(n, a[mult == 1], b[mult == 1])
+        # Simple graph: every endpoint pair once (parallels collapsed, not dropped -- they
+        # still close cycles); bridges via DFS low-link.
+        bridges_pair = _find_bridges(n, a[first], b[first])
         # map bridge endpoint pairs back to branch rows (only mult==1 candidates)
         out = set()
         for k in np.nonzero(mult == 1)[0]:
             if (int(a[k]), int(b[k])) in bridges_pair:
-                out.add(int(k))
+                out.add(int(live[k]))
         return out
 
     def build(self) -> ContingencyBatch:

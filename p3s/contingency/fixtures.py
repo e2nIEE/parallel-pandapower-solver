@@ -278,6 +278,42 @@ def multi_branch_group():
     return net
 
 
+def open_tie_radial():
+    """Two radial feeders from one slack, joined by a tie line with an OPEN switch.
+
+    The usual layout of a distribution grid (e.g. mv_oberrhein): meshed on paper, radial
+    in operation. The open tie stays modelled (it keeps its charging on the closed end) but
+    couples nothing, so it must not count as a connection: outaging a feeder head cuts the
+    whole feeder off even though the tie "touches" the other feeder.
+
+      b0 (slack) -- b1 -- b2
+         \\                 :  tie b2-b4, switch open at b4
+          -- b3 -- b4 ......
+    """
+    net = pp.create_empty_network(sn_mva=1.0)
+    b = [pp.create_bus(net, vn_kv=20.0, name=f"b{i}") for i in range(5)]
+    pp.create_ext_grid(net, b[0], vm_pu=1.0, va_degree=0.0)
+
+    lp = {"length_km": 2.0, "r_ohm_per_km": 0.16, "x_ohm_per_km": 0.12, "c_nf_per_km": 280.0, "max_i_ka": 0.4}
+    head_a = pp.create_line_from_parameters(net, b[0], b[1], **lp)
+    pp.create_line_from_parameters(net, b[1], b[2], **lp)
+    pp.create_line_from_parameters(net, b[0], b[3], **lp)
+    end_b = pp.create_line_from_parameters(net, b[3], b[4], **lp)
+    tie = pp.create_line_from_parameters(net, b[2], b[4], **lp)
+    pp.create_switch(net, b[4], tie, et="l", closed=False)
+
+    pp.create_load(net, b[1], p_mw=1.0, q_mvar=0.3)
+    pp.create_load(net, b[2], p_mw=0.8, q_mvar=0.2)
+    pp.create_load(net, b[3], p_mw=1.2, q_mvar=0.3)
+    pp.create_load(net, b[4], p_mw=0.6, q_mvar=0.1)
+
+    _add_outage_group_columns(net)
+    net.line.loc[head_a, "outage_group"] = "head_a"  # islands b1, b2 (tie is open)
+    net.line.loc[end_b, "outage_group"] = "end_b"  # islands b4
+    net.line.loc[tie, "outage_group"] = "tie"  # dead line: islands nothing
+    return net
+
+
 # Registry of all Phase 0 fixtures, keyed by name.
 FIXTURES = {
     "radial_spur": radial_spur,
@@ -286,4 +322,5 @@ FIXTURES = {
     "tapped_trafo": tapped_trafo,
     "generator_island": generator_island,
     "multi_branch_group": multi_branch_group,
+    "open_tie_radial": open_tie_radial,
 }

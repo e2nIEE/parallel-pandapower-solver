@@ -12,6 +12,7 @@ the test is hermetic. Mirrors ``tests/cuda/test_cuda_timeseries.py``.
 import copy
 
 import numpy as np
+import pandapower as pp
 import pytest
 from pandapower import runpp
 from pandapower.networks import case9, case14, case118
@@ -68,6 +69,40 @@ def test_cpp_timeseries_matches_runpp(case, n_threads):
         va_err = np.abs(va_gpu[:, t] - ref.res_bus.va_degree.values).max()
         assert vm_err < 1e-6, f"{case} t={t} nt={n_threads}: vm err {vm_err:.2e}"
         assert va_err < 1e-4, f"{case} t={t} nt={n_threads}: va err {va_err:.2e}"
+
+
+def test_cpp_timeseries_respects_scaling_and_in_service():
+    """pandapower applies ``scaling`` on top of the time-series p_mw/q_mvar, and an
+    out-of-service element injects nothing. The Sbus deltas must do the same, otherwise
+    every step is off by (1 - scaling) * (value - base) -- 0.028 pu on mv_oberrhein,
+    whose sgens carry scaling = 0."""
+    net = case14()
+    net.trafo.shift_degree = 0.0
+    calculate_trafo_characteristic(net, inplace=True)
+    rng = np.random.default_rng(1)
+    net.load["scaling"] = rng.uniform(0.3, 1.2, len(net.load))
+    net.load.loc[net.load.index[2], "in_service"] = False
+    for bus, scaling in ((4, 0.5), (9, 0.0), (13, 1.0)):
+        pp.create_sgen(net, bus, p_mw=10.0, q_mvar=2.0, scaling=scaling)
+    T = 5
+
+    ts = {
+        ("load", "p_mw"): net.load.p_mw.to_numpy()[:, None] * rng.uniform(0.5, 1.5, (len(net.load), T)),
+        ("load", "q_mvar"): net.load.q_mvar.to_numpy()[:, None] * rng.uniform(0.5, 1.5, (len(net.load), T)),
+        ("sgen", "p_mw"): rng.uniform(0.0, 20.0, (len(net.sgen), T)),
+        ("sgen", "q_mvar"): rng.uniform(-3.0, 3.0, (len(net.sgen), T)),
+    }
+    voltages = NewtonPowerflowCpp(net).calculate_timeseries_cpp(net, ts, n_threads=1)
+
+    for t in range(T):
+        ref = copy.deepcopy(net)
+        for (element, variable), values in ts.items():
+            ref[element][variable] = values[:, t]
+        runpp(ref, init="flat")
+        vm_err = np.abs(np.abs(voltages[:, t]) - ref.res_bus.vm_pu.values).max()
+        va_err = np.abs(np.degrees(np.angle(voltages[:, t])) - ref.res_bus.va_degree.values).max()
+        assert vm_err < 1e-6, f"t={t}: vm err {vm_err:.2e}"
+        assert va_err < 1e-4, f"t={t}: va err {va_err:.2e}"
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])
