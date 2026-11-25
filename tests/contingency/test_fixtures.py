@@ -32,6 +32,7 @@ EXPECTED_GROUPS = {
     "tapped_trafo": ["trafo"],
     "generator_island": ["tie"],
     "multi_branch_group": ["string"],
+    "open_tie_radial": ["end_b", "head_a", "tie"],
 }
 
 # Expected served-bus count per (fixture, group) with re-slacking OFF.
@@ -43,6 +44,9 @@ EXPECTED_SERVED_OFF = {
     ("tapped_trafo", "trafo"): 3,
     ("generator_island", "tie"): 2,  # cluster B (g0,g1) unserved
     ("multi_branch_group", "string"): 4,  # b4, b5 islanded
+    ("open_tie_radial", "head_a"): 3,  # b1, b2 islanded despite the (open) tie to b4
+    ("open_tie_radial", "end_b"): 4,  # b4 islanded
+    ("open_tie_radial", "tie"): 5,  # open tie couples nothing
 }
 
 
