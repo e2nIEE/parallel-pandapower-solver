@@ -544,7 +544,6 @@ def test_trafo_rated_voltage_differs_from_bus(vn_hv_kv, vn_lv_kv):
     _assert_matches_pandapower(_net_trafo(vn_hv_kv, vn_lv_kv))
 
 
-
 @pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
 @pytest.mark.parametrize(
     "vn_hv_kv, vn_lv_kv, df",
@@ -564,6 +563,29 @@ def test_trafo_loading_uses_rated_voltages_and_df(solve, vn_hv_kv, vn_lv_kv, df)
     solve(net)
     cols = ["i_hv_ka", "i_lv_ka", "loading_percent"]
     np.testing.assert_allclose(net.res_trafo[cols], ref.res_trafo[cols], rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+def test_trafo_loading_without_df_defaults_to_one(solve):
+    net = _net_trafo(110.0, 20.0)
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    net.trafo.drop(columns="df", inplace=True)
+    solve(net)
+    np.testing.assert_allclose(net.res_trafo.loading_percent, ref.res_trafo.loading_percent, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+@pytest.mark.parametrize("second_df", [np.nan, 0.8], ids=["all_missing", "partially_missing"])
+def test_trafo_loading_with_missing_df_values_defaults_to_one(solve, second_df):
+    net = _net_two_trafos("Ratio")
+    net.trafo["df"] = [np.nan, second_df]
+    ref = copy.deepcopy(net)
+    ref.trafo["df"] = ref.trafo["df"].fillna(1.0)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    solve(net)
+    np.testing.assert_allclose(net.res_trafo.loading_percent, ref.res_trafo.loading_percent, rtol=0, atol=1e-6)
+    assert np.isnan(net.trafo.df.iloc[0])
 
 
 RATIO_TAP = dict(tap_changer_type="Ratio", tap_neutral=0, tap_min=-5, tap_max=5, tap_step_percent=1.25)

@@ -370,9 +370,7 @@ class NewtonPowerflow:
                 trafo_currents_to.values * net.trafo.vn_lv_kv.values * np.sqrt(3),
             )
             df = net.trafo["df"].fillna(1.0) if "df" in net.trafo else 1.0
-            res_trafo["loading_percent"].to_numpy(copy=False)[:] = (
-                loading_percent / net.trafo.sn_mva / df * 100
-            )
+            res_trafo["loading_percent"].to_numpy(copy=False)[:] = loading_percent / net.trafo.sn_mva / df * 100
 
         # -- calculate ward results --
         # res_ward reports the TWO halves recombined, as pandapower does:
