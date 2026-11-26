@@ -90,6 +90,27 @@ def test_parallel_branch_keeps_other_line_contribution():
     assert abs(M[0, 1] - ref[0, 1]) < 1e-9
 
 
+def test_inactive_branches_and_impedance_connectivity():
+    import pandapower as pp
+
+    net = pp.create_empty_network()
+    buses = [pp.create_bus(net, vn_kv=110) for _ in range(3)]
+    pp.create_ext_grid(net, buses[0])
+    line = pp.create_line_from_parameters(net, buses[0], buses[1], 1, 0.1, 0.1, 0, 1)
+    pp.create_line_from_parameters(net, buses[1], buses[2], 1, 0.1, 0.1, 0, 1)
+    pp.create_line_from_parameters(net, buses[0], buses[2], 1, 0.1, 0.1, 0, 1, in_service=False)
+    pp.create_impedance(net, buses[0], buses[1], rft_pu=0.01, xft_pu=0.1, sn_mva=100)
+    net.line["outage_group"] = None
+    net.line.at[line, "outage_group"] = "line"
+    batch = generate_cases(net)
+
+    assert batch.cases[0].served.all()
+    np.testing.assert_allclose(
+        sp.csr_matrix((batch.cases[0].Yx, batch.Yj, batch.Yp), shape=(3, 3)).toarray(),
+        _rebuilt_ybus_without_group(net, "line").toarray(),
+    )
+
+
 def test_tapped_trafo_stamp_is_asymmetric():
     """The trafo stamp must be asymmetric (Y[f,t] != Y[t,f]); subtracting it correctly
     is what the rebuilt-Ybus match in the parametrized test already proves. Here we
@@ -99,6 +120,20 @@ def test_tapped_trafo_stamp_is_asymmetric():
     base = sp.csr_matrix((gen.Yx_base, gen.Yj, gen.Yp), shape=(gen.n_bus,) * 2)
     # hv bus 0, lv bus 1 carry the trafo; off-nominal tap+shift -> asymmetric
     assert abs(base[0, 1] - base[1, 0]) > 1e-6
+
+
+def test_tapped_trafo_dc_inputs_match_rebuilt_outage():
+    """Outage-specific DC stamps must include the removed trafo's phase-shift injection."""
+    net = FIXTURES["tapped_trafo"]()
+    gen = ContingencyCaseGenerator(net)
+    Bbus, p_shift = gen.dc_inputs_for_case("trafo")
+
+    ref_net = copy.deepcopy(net)
+    ref_net.trafo.drop(index=ref_net.trafo.index[ref_net.trafo.outage_group == "trafo"], inplace=True)
+    ref = NewtonPowerflow(ref_net)
+
+    np.testing.assert_allclose(Bbus.toarray(), ref._Bbus.toarray(), atol=1e-12)
+    np.testing.assert_allclose(p_shift, ref._p_shift, atol=1e-12)
 
 
 @pytest.mark.parametrize("name", list(FIXTURES))

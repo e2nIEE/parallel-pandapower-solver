@@ -25,6 +25,10 @@ class TwoWindingTransformerModel(TwoPort):
         n_bus = len(bus_table)
         self.voltages_from = bus_table.loc[self._from_bus, "vn_kv"]
         self.voltages_to = bus_table.loc[self._to_bus, "vn_kv"]
+        self._rated_voltages_from = trafo_table["vn_hv_kv"].to_numpy(dtype=float)
+        self._rated_voltages_to = trafo_table["vn_lv_kv"].to_numpy(dtype=float)
+        df = trafo_table["df"].fillna(1.0).to_numpy(dtype=float) if "df" in trafo_table else 1.0
+        self._rated_power_mva = trafo_table["sn_mva"].to_numpy(dtype=float) * df
 
         # Rated voltages vs bus nominal voltages. The trafo data (vk, vkr, pfe, i0) is referred
         # to the trafo's own rated voltages vn_hv_kv / vn_lv_kv, the Ybus to the buses' vn_kv.
@@ -223,3 +227,14 @@ class TwoWindingTransformerModel(TwoPort):
         self.p_shift = np.zeros(n_bus)
         np.add.at(self.p_shift, self._from_bus, p_shift_inj)
         np.add.at(self.p_shift, self._to_bus, -p_shift_inj)
+
+    def loading_percent(self, i_from: np.ndarray, i_to: np.ndarray) -> np.ndarray:
+        """Transformer loading from end currents, for one or more voltage solutions."""
+        i_from = np.asarray(i_from, dtype=float)
+        i_to = np.asarray(i_to, dtype=float)
+        shape = (-1,) + (1,) * (i_from.ndim - 1)
+        rated_hv = self._rated_voltages_from.reshape(shape)
+        rated_lv = self._rated_voltages_to.reshape(shape)
+        rated_power = self._rated_power_mva.reshape(shape)
+        s_max = np.maximum(i_from * rated_hv * np.sqrt(3.0), i_to * rated_lv * np.sqrt(3.0))
+        return s_max / rated_power * 100.0

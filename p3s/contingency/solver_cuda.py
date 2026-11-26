@@ -23,8 +23,7 @@ from p3s.contingency.case_generator import (
     ContingencyBatch,
     ContingencyCaseGenerator,
 )
-from p3s.contingency.solver_cpp import ContingencyResultTable
-from p3s.timeseries import dc_initial_voltage
+from p3s.contingency.solver_cpp import ContingencyResultTable, _initial_conditions
 
 
 def solve_contingencies_cuda(
@@ -40,9 +39,9 @@ def solve_contingencies_cuda(
     """Solve every N-1 contingency in ``net`` on the GPU polar batch path.
 
     Signature and semantics mirror ``solve_contingencies_cpp`` (minus ``n_threads``,
-    which is meaningless on the GPU). ``init`` picks the shared start voltage: "dc" seeds
-    angles (needed for phase-shifting transformers), "flat" is the robust choice on very
-    large meshed nets. ``backend`` is the linear solver of the Newton step: "lean" (the
+    which is meaningless on the GPU). ``init`` picks the start voltage: "dc" seeds
+    angles per contingency (needed for phase-shifting transformers), "flat" is the robust
+    choice on very large meshed nets. ``backend`` is the linear solver of the Newton step: "lean" (the
     batched LU kernel, default) or "cudss" / "rf" / "qr" -- see ``PolarNewtonSolverCUDA``.
     ``precision="mixed"`` lets the lean backend factorize in single precision while a case is
     far from its solution (faster; mismatch and convergence test stay double).
@@ -76,27 +75,8 @@ def solve_contingencies_cuda(
     solver.max_chunk = max_chunk
     solver.precision = precision
 
-    # Start voltage (one vector reused across all cases) -- identical to solver_cpp.
-    if init == "dc":
-        v_start = dc_initial_voltage(gen._npf)
-    elif init == "flat":
-        v_start = gen._npf._initial_voltage.copy()
-    else:
-        raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
-
     Sbus: NDArray = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)
-
-    V0: NDArray = np.empty((n, L), dtype=np.complex128)
-    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
-    for c, case in enumerate(batch.cases):
-        v0 = v_start.copy()
-        for bus, _kind in case.pinned_refs:
-            v0[bus] = np.abs(v0[bus]) + 0.0j
-            pin[bus, c] = 1
-        unserved = ~case.served
-        pin[unserved, c] = 1
-        v0[unserved] = 1.0 + 0.0j
-        V0[:, c] = v0
+    V0, pin = _initial_conditions(gen, batch, init)
 
     if batch._stamp is not None:
         # Every case is the intact Ybus minus its sparse outage stamp. Hand the stamps over

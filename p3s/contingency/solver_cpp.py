@@ -41,7 +41,7 @@ from p3s.contingency.case_generator import (
     ContingencyBatch,
     ContingencyCaseGenerator,
 )
-from p3s.timeseries import dc_initial_voltage
+from p3s.timeseries import dc_initial_voltage_for_case
 
 
 @dataclass
@@ -61,18 +61,67 @@ class ContingencyResultTable:
         return np.degrees(np.angle(self.V))
 
 
+def _initial_conditions(
+    gen: ContingencyCaseGenerator, batch: ContingencyBatch, init: str
+) -> tuple[NDArray, NDArray]:
+    """Build per-case start voltages and pin masks shared by CPU and CUDA paths."""
+    n, L = batch.n_bus, len(batch.cases)
+    if init not in ("dc", "flat"):
+        raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
+
+    V0: NDArray = np.empty((n, L), dtype=np.complex128)
+    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
+    pf = gen._npf
+    flat_start = pf._initial_voltage
+    pvpq_all = np.r_[pf.busses["pv"], pf.busses["pq"]]
+
+    for c, case in enumerate(batch.cases):
+        pinned_buses = np.asarray([bus for bus, _kind in case.pinned_refs], dtype=np.intp)
+        if init == "dc":
+            Bbus, p_shift = gen.dc_inputs_for_case(case.group)
+            ref = np.unique(np.r_[pf.busses["ref"], pinned_buses])
+            pvpq = pvpq_all[case.served[pvpq_all]]
+            if pinned_buses.size:
+                pvpq = pvpq[~np.isin(pvpq, pinned_buses)]
+            initial = flat_start.copy()
+            initial[pinned_buses] = np.abs(initial[pinned_buses]) + 0.0j
+            v0 = dc_initial_voltage_for_case(pf, Bbus, p_shift, ref, pvpq, initial)
+        else:
+            v0 = flat_start.copy()
+
+        for bus, _kind in case.pinned_refs:
+            v0[bus] = np.abs(v0[bus]) + 0.0j
+            pin[bus, c] = 1
+        unserved = ~case.served
+        pin[unserved, c] = 1
+        v0[unserved] = 1.0 + 0.0j
+        V0[:, c] = v0
+
+    return V0, pin
+
+
 def solve_contingencies_cpp(
-    net, reslack_islands: bool = False, tol: float = 1e-8, max_iter: int = 30, n_threads: int = 0, init: str = "dc"
+    net,
+    reslack_islands: bool = False,
+    tol: float = 1e-8,
+    max_iter: int = 30,
+    n_threads: int = 0,
+    init: str = "dc",
+    line_search: bool = False,
 ) -> ContingencyResultTable:
     """Solve every N-1 contingency in ``net`` on the CPU C++/KLU batch path.
 
     init: {"dc", "flat"}, default "dc"
-        Start-voltage strategy (one vector reused across all cases). "dc" runs p3s's
-        DC power flow to seed angles -- needed for phase-shifting transformers, where a
-        flat start diverges. "flat" uses 1 pu / 0 deg with the known voltage setpoints.
+        Start-voltage strategy. "dc" runs a contingency-specific DC power flow to seed
+        angles -- needed for phase-shifting transformers, where a flat start diverges.
+        "flat" uses 1 pu / 0 deg with the known voltage setpoints.
         Prefer "flat" on very large meshed nets (e.g. case9241pegase) where p3s's
         simplified DC model produces inaccurate angles that fall outside Newton's basin
         and even fail the first Jacobian factorization. See ``p3s-dc-init-bug``.
+    line_search: bool, default False
+        Enable damped Newton backtracking. The default full Newton step matches
+        pandapower's Newton-Raphson path more closely; damping can converge to a
+        different solution branch for stressed contingencies.
     """
     gen = ContingencyCaseGenerator(net, reslack_islands=reslack_islands)
     batch: ContingencyBatch = gen.build()
@@ -98,40 +147,13 @@ def solve_contingencies_cpp(
             iterations=np.empty(0, int),
         )
 
-    # Start voltage (one vector reused across all cases). "dc" seeds angles for
-    # phase-shifting transformers; "flat" is the robust choice on very large nets where
-    # p3s's DC model is inaccurate (see the `init` docstring). Both carry the
-    # ext_grid + pv/gen voltage setpoints (from _initial_voltage).
-    if init == "dc":
-        v_start = dc_initial_voltage(gen._npf)
-    elif init == "flat":
-        v_start = gen._npf._initial_voltage.copy()
-    else:
-        raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
-
     # per-case Ybus values (magnitude/angle) and pin/V0 matrices, columns = cases
     Yx_mat = batch.Yx_matrix  # (nnz, L) complex
     Yx_mag = np.ascontiguousarray(np.abs(Yx_mat), dtype=np.float64)
     Yx_ang = np.ascontiguousarray(np.angle(Yx_mat), dtype=np.float64)
 
     Sbus = np.ascontiguousarray(gen._npf._sBus, dtype=np.complex128)  # constant per case
-
-    V0: NDArray = np.empty((n, L), dtype=np.complex128)
-    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
-    for c, case in enumerate(batch.cases):
-        v0 = v_start.copy()  # already holds ext_grid + pv/gen voltage setpoints
-        # pin re-slack reference generators at (gen vm setpoint) angle 0 -- the island's
-        # angle reference is arbitrary, so we match the slack convention (va=0) rather
-        # than leaving the DC-init angle, which would rotate the whole island by a
-        # constant (physically identical but differs from pandapower's va=0 ext_grid).
-        for bus, _kind in case.pinned_refs:
-            v0[bus] = np.abs(v0[bus]) + 0.0j
-            pin[bus, c] = 1
-        # pin unserved buses at a placeholder; overwritten with NaN after the solve
-        unserved = ~case.served
-        pin[unserved, c] = 1
-        v0[unserved] = 1.0 + 0.0j
-        V0[:, c] = v0
+    V0, pin = _initial_conditions(gen, batch, init)
 
     res = solver.solve_batch_contingency(
         Yx_mag,
@@ -142,6 +164,7 @@ def solve_contingencies_cpp(
         max_iter=max_iter,
         tol=tol,
         n_threads=n_threads,
+        line_search=line_search,
     )
 
     V = res["V"].copy()  # (n, L)

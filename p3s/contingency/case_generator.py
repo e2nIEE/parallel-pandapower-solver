@@ -118,7 +118,7 @@ class ContingencyBatch:
         return np.stack([c.Yx for c in self.cases], axis=1)
 
 
-def _branch_stamps(npf: NewtonPowerflow):
+def _branch_stamps(npf: NewtonPowerflow, net):
     """Yield (from_bus, to_bus, Yff, Yft, Ytf, Ytt, table, row_idx) for every branch
     p3s modelled, reading the per-branch stamp straight off the element models.
 
@@ -130,7 +130,7 @@ def _branch_stamps(npf: NewtonPowerflow):
     # The models stamp on bus positions; the Ybus lives on nodes (buses fused by closed bus-bus
     # switches share one, unsupplied buses have none -- p3s.topology).
     node_of_bus = npf._topology.node_of_bus
-    for table in ("line", "trafo"):
+    for table in ("line", "trafo", "impedance"):
         model = elements.get(table)
         if model is None:
             continue
@@ -141,6 +141,8 @@ def _branch_stamps(npf: NewtonPowerflow):
         ytf = np.asarray(model._Y_tf, dtype=complex)  # type: ignore[union-attr]
         ytt = np.asarray(model._Y_tt, dtype=complex)  # type: ignore[union-attr]
         for i in range(len(fb)):
+            if not net[table].in_service.iloc[i]:
+                continue
             if fb[i] < 0 or tb[i] < 0:
                 continue  # unsupplied: not in the Ybus
             yield table, i, int(fb[i]), int(tb[i]), yff[i], yft[i], ytf[i], ytt[i]
@@ -244,10 +246,13 @@ class ContingencyCaseGenerator:
         self._Ybus = self._npf._YBus.tocsr()
         self._Ybus.sort_indices()
         self.n_bus = self._Ybus.shape[0]
+        self._Bbus = self._npf._Bbus.tocsr()
+        self._Bbus.sort_indices()
 
         self.Yp = np.ascontiguousarray(self._Ybus.indptr, dtype=np.int32)
         self.Yj = np.ascontiguousarray(self._Ybus.indices, dtype=np.int32)
         self.Yx_base = np.ascontiguousarray(self._Ybus.data, dtype=np.complex128)
+        self._Bpos = _csr_pos_lookup(self._Bbus)
 
         self.pv = np.asarray(self._npf.busses["pv"], dtype=np.int64)
         self.pq = np.asarray(self._npf.busses["pq"], dtype=np.int64)
@@ -289,9 +294,9 @@ class ContingencyCaseGenerator:
         records = []  # list of dict(group, entries=[(csr_pos, value), ...])
         net = self.net
         fb_l, tb_l, grp_l, pos_l, val_l = [], [], [], [], []
-        for table, i, fb, tb, yff, yft, ytf, ytt in _branch_stamps(self._npf):
+        for table, i, fb, tb, yff, yft, ytf, ytt in _branch_stamps(self._npf, net):
             group = None
-            if "outage_group" in net[table].columns:
+            if table in ("line", "trafo") and "outage_group" in net[table].columns:
                 # element model row i corresponds to net[table] row i (same order)
                 group = net[table]["outage_group"].iloc[i]
                 if group is not None and (isinstance(group, float) and np.isnan(group)):
@@ -299,7 +304,7 @@ class ContingencyCaseGenerator:
             pos = (self._pos(fb, fb), self._pos(fb, tb), self._pos(tb, fb), self._pos(tb, tb))
             val = (yff, yft, ytf, ytt)
             entries = list(zip(pos, val, strict=False))
-            records.append({"group": group, "from": fb, "to": tb, "entries": entries})
+            records.append({"group": group, "table": table, "row": i, "from": fb, "to": tb, "entries": entries})
             fb_l.append(fb)
             tb_l.append(tb)
             grp_l.append(group)
@@ -341,6 +346,35 @@ class ContingencyCaseGenerator:
     def _outaged_branch_indices(self, group) -> list:
         """Indices into self._branch_records for branches in `group`."""
         return [k for k, rec in enumerate(self._branch_records) if rec["group"] == group]
+
+    def dc_inputs_for_case(self, group: str) -> tuple[sp.csr_matrix, NDArray]:
+        """Return the DC susceptance matrix and phase-shift injection after an outage."""
+        data = self._Bbus.data.copy()
+        p_shift = self._npf._p_shift.copy()
+        dc_names = ("_DC_Yff", "_DC_Yft", "_DC_Ytf", "_DC_Ytt")
+
+        for k in self._outaged_branch_indices(group):
+            record = self._branch_records[k]
+            model = self._npf._ybus_elements[record["table"]]
+            fb, tb, row = record["from"], record["to"], record["row"]
+            positions = (
+                self._Bpos(fb, fb),
+                self._Bpos(fb, tb),
+                self._Bpos(tb, fb),
+                self._Bpos(tb, tb),
+            )
+            for pos, name in zip(positions, dc_names, strict=True):
+                value = float(np.imag(getattr(model, name)[row]))
+                if value:
+                    data[pos] -= value
+
+            shifts = getattr(model, "_p_shift_inj", None)
+            if shifts is not None:
+                p_shift[fb] -= shifts[row]
+                p_shift[tb] += shifts[row]
+
+        Bbus = sp.csr_matrix((data, self._Bbus.indices, self._Bbus.indptr), shape=self._Bbus.shape)
+        return Bbus, p_shift
 
     # -- per-contingency assembly --------------------------------------------
 

@@ -34,12 +34,13 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     # 1) Calculate B
     B = 2 * C * f_hz * np.pi * 1e-9 * Z_N
 
-    # 2) Calculate Z Series impedance, everything needs to be scaled to p.u.
+    # 2) Series admittance in p.u. (named Z_sr?!)
     x_s = 1j * X * length / Z_N
-    Z_sr = 1 / (R * length / Z_N + x_s) / parallel
+    Z_sr = parallel / (R * length / Z_N + x_s)
 
-    # 3) Total shunt admittance, split equally at both ends
-    Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
+    # 3) Total shunt admittance in p.u., split equally at both ends. G [µS/km] needs the
+    #    same Z_N scaling as B (pandapower: g = g_us_per_km * 1e-6 * baseR * length * parallel)
+    Y_sr = 0.5 * (G * 1e-6 * Z_N + 1j * B) * length * parallel
 
     # 4) Calculate admittances
     Y_ff = Z_sr + Y_sr
@@ -47,7 +48,7 @@ def pi_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     Y_ft = -Z_sr
     Y_tf = -Z_sr
 
-    return Y_ff, Y_ft, Y_tf, Y_tt, 1 / x_s
+    return Y_ff, Y_ft, Y_tf, Y_tt, parallel / x_s
 
 
 @numba.njit
@@ -76,10 +77,10 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
 
     # 2) Calculate Z Series impedance, everything needs to be scaled to p.u.
     x_s = 1j * X * length / Z_N
-    Z_sr = 1 / (R * length / Z_N + x_s) / parallel
+    Z_sr = parallel / (R * length / Z_N + x_s)  # series admittance in p.u., see pi_model
 
-    # 3) Total shunt admittance, split equally at both ends
-    Y_sr = 0.5 * (G * 1e-6 + 1j * B) * length * parallel
+    # 3) Total shunt admittance in p.u., split equally at both ends (see pi_model)
+    Y_sr = 0.5 * (G * 1e-6 * Z_N + 1j * B) * length * parallel
 
     # T-Model-Branch
     Z1 = Z2 = Z_sr / 2
@@ -96,7 +97,7 @@ def t_model(R, X, C, G, length, vn_kv, parallel, f_hz=50.0, sn_mva=1.0):
     Y_ft = -(a1 * a2) / D
     Y_tf = Y_ft
 
-    return Y_ff, Y_ft, Y_tf, Y_tt, 1 / x_s
+    return Y_ff, Y_ft, Y_tf, Y_tt, parallel / x_s
 
 
 class TransmissionLineModel(TwoPort):

@@ -544,6 +544,50 @@ def test_trafo_rated_voltage_differs_from_bus(vn_hv_kv, vn_lv_kv):
     _assert_matches_pandapower(_net_trafo(vn_hv_kv, vn_lv_kv))
 
 
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+@pytest.mark.parametrize(
+    "vn_hv_kv, vn_lv_kv, df",
+    [
+        (110.0, 20.0, 1.0),
+        (115.0, 20.0, 1.0),
+        (110.0, 19.0, 1.0),
+        (110.0, 20.0, 0.8),
+        (110.0, 20.0, 2.4),
+        (115.0, 21.0, 2.4),
+    ],
+)
+def test_trafo_loading_uses_rated_voltages_and_df(solve, vn_hv_kv, vn_lv_kv, df):
+    net = _net_trafo(vn_hv_kv, vn_lv_kv, df=df)
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    solve(net)
+    cols = ["i_hv_ka", "i_lv_ka", "loading_percent"]
+    np.testing.assert_allclose(net.res_trafo[cols], ref.res_trafo[cols], rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+def test_trafo_loading_without_df_defaults_to_one(solve):
+    net = _net_trafo(110.0, 20.0)
+    ref = copy.deepcopy(net)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    net.trafo.drop(columns="df", inplace=True)
+    solve(net)
+    np.testing.assert_allclose(net.res_trafo.loading_percent, ref.res_trafo.loading_percent, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("solve", [_results_cpp, _results_python], ids=["cpp", "python"])
+@pytest.mark.parametrize("second_df", [np.nan, 0.8], ids=["all_missing", "partially_missing"])
+def test_trafo_loading_with_missing_df_values_defaults_to_one(solve, second_df):
+    net = _net_two_trafos("Ratio")
+    net.trafo["df"] = [np.nan, second_df]
+    ref = copy.deepcopy(net)
+    ref.trafo["df"] = ref.trafo["df"].fillna(1.0)
+    runpp(ref, init="flat", calculate_voltage_angles=True, tolerance_mva=1e-8, trafo_loading="current")
+    solve(net)
+    np.testing.assert_allclose(net.res_trafo.loading_percent, ref.res_trafo.loading_percent, rtol=0, atol=1e-6)
+    assert np.isnan(net.trafo.df.iloc[0])
+
+
 RATIO_TAP = dict(tap_changer_type="Ratio", tap_neutral=0, tap_min=-5, tap_max=5, tap_step_percent=1.25)
 
 
@@ -926,3 +970,39 @@ def test_tap_changer_types_match_pandapower(tap_changer_type, tap):
     npf = NewtonPowerflow(net)
     np.testing.assert_allclose(npf._YBus.toarray(), ref._ppc["internal"]["Ybus"].toarray(), rtol=1e-10, atol=1e-10)
     _assert_matches_pandapower(_net_two_trafos(tap_changer_type, **tap))
+
+
+# --- 9./10. lines: parallel systems and line conductance ------------------------------------
+
+
+def _net_parallel_line(parallel: int = 1, g_us_per_km: float = 0.0, n_single: int = 1) -> pandapowerNet:
+    """Two 220 kV lines in series feeding a load and a PV gen. The first line has ``parallel``
+    systems (or is drawn as ``n_single`` separate lines) and an optional conductance."""
+    net = create_empty_network(sn_mva=100.0)
+    b = [create_bus(net, vn_kv=220.0) for _ in range(3)]
+    create_ext_grid(net, b[0], vm_pu=1.02)
+    kw = dict(length_km=40.0, r_ohm_per_km=0.05, x_ohm_per_km=0.4, c_nf_per_km=12.0, max_i_ka=1.0)
+    for _ in range(n_single):
+        create_line_from_parameters(net, b[0], b[1], parallel=parallel, g_us_per_km=g_us_per_km, **kw)
+    create_line_from_parameters(net, b[1], b[2], **kw)
+    create_gen(net, b[2], p_mw=50.0, vm_pu=1.01)
+    create_load(net, b[1], p_mw=250.0, q_mvar=80.0)
+    return net
+
+
+@SOLVERS
+@pytest.mark.parametrize("parallel", [1, 2, 3])
+@pytest.mark.parametrize("g_us_per_km", [0.0, 0.5])
+def test_line_parallel_and_conductance_match_pandapower(parallel, g_us_per_km, solve):
+    net = _net_parallel_line(parallel, g_us_per_km)
+    ref = _reference_pp(net)
+    solve(net)
+    _assert_res_matches(net, ref, "res_bus", ["vm_pu", "va_degree"])
+    _assert_res_matches(net, ref, "res_line", ["p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar", "pl_mw"])
+
+
+@pytest.mark.parametrize("k", [2, 3])
+def test_parallel_line_equals_k_single_lines(k):
+    _, v_parallel = _solve_p3s(_net_parallel_line(parallel=k))
+    _, v_single = _solve_p3s(_net_parallel_line(n_single=k))
+    np.testing.assert_allclose(v_parallel, v_single, rtol=1e-10, atol=1e-12)

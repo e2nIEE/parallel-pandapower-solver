@@ -12,11 +12,11 @@ def dc_pi_model(R, G, length, vn_kv, parallel, sn_mva=1.0):
     # 1) Calculate scaling, to scale everything in p.u.
     R_N = (vn_kv**2) / sn_mva
 
-    # 2) calculate series impedance
-    Z_sr = 1 / (R / R_N) * length / parallel
+    # 2) series admittance in p.u. (named Z_sr?)
+    Z_sr = parallel / (R * length / R_N)
 
-    # 3) calculate shunt impedance
-    Y_sr = 0.5 * G * 1e-6 * R_N * length / parallel
+    # 3) shunt admittance in p.u.
+    Y_sr = 0.5 * G * 1e-6 * R_N * length * parallel
 
     # 4) Calculate transfer parameters
     Y_ff = Z_sr + Y_sr

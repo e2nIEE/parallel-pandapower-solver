@@ -210,35 +210,38 @@ def dc_initial_voltage(pf) -> NDArray:
     Newton. When the DC angles exceed ``_DC_ANGLE_SANITY_DEG`` we fall back to a flat
     start (the setpoint-carrying ``_initial_voltage``), which converges there.
     """
-    flat = pf._initial_voltage.copy()
+    return dc_initial_voltage_for_case(
+        pf,
+        pf._Bbus,
+        pf._p_shift,
+        pf.busses["ref"],
+        np.r_[pf.busses["pv"], pf.busses["pq"]],
+    )
+
+
+def dc_initial_voltage_for_case(pf, y_bus, p_shift, ref, pvpq, initial_voltage=None) -> NDArray:
+    """DC-seeded voltage for one case using its own Bbus, phase shifts, and buses."""
+    flat = pf._initial_voltage.copy() if initial_voltage is None else np.asarray(initial_voltage).copy()
     voltage = flat.copy()
-    pvpq = np.r_[pf.busses["pv"], pf.busses["pq"]]
     pv = pf.busses["pv"]
     pq = pf.busses["pq"]
     pv_vm = np.abs(voltage[pv]) if len(pv) > 0 else None
     pq_vm = np.abs(voltage[pq]) if len(pq) > 0 else None
-    # DC init solves B*theta = P_inj with P_inj = real bus power injection
-    # (pf._sBus.real) + transformer phase-shift injection (pf._p_shift). pf._Bbus is
-    # already the real susceptance matrix, so it is passed directly (NOT pf._Bbus.imag,
-    # which double-.imag'd to zeros -> singular -> flat start). See NewtonPowerflowCpp
-    # for the full bug note.
-    voltage[pvpq] = pf._pre_dc_solve(
-        yBus=pf._Bbus,
-        voltage=voltage,
-        Pinj=pf._sBus.real + pf._p_shift,
-        ref=pf.busses["ref"],
-        pvpq=pvpq,
-    )
+    pvpq = np.asarray(pvpq, dtype=np.intp)
+    if pvpq.size:
+        voltage[pvpq] = pf._pre_dc_solve(
+            yBus=y_bus,
+            voltage=voltage,
+            Pinj=pf._sBus.real + p_shift,
+            ref=ref,
+            pvpq=pvpq,
+        )
     if len(pv) > 0:
         voltage[pv] = pv_vm * np.exp(1j * np.angle(voltage[pv]))
-    # ...and the same for PQ: the DC solve yields ANGLES only and returns unit-magnitude
-    # phasors, which would silently reset the PQ seed magnitude (the mean set-point, see
-    # mean_setpoint_vm) back to 1.0 pu. Restore it, keeping the DC-estimated angle.
     if len(pq) > 0:
         voltage[pq] = pq_vm * np.exp(1j * np.angle(voltage[pq]))
 
-    # Sanity fallback: reject a non-physical DC start (p3s's DC model at scale).
     max_angle_deg = np.abs(np.degrees(np.angle(voltage))).max()
-    if not np.isfinite(max_angle_deg):  # or max_angle_deg > _DC_ANGLE_SANITY_DEG:
+    if not np.isfinite(max_angle_deg):
         return flat
     return voltage
