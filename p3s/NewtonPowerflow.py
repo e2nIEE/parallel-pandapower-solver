@@ -433,7 +433,8 @@ class NewtonPowerflow:
         # 4) Ykk\(S_inj') berechnen (wahrscheinlich ein spsolve)
 
         Bbus = yBus[pvpq.T, :][:, pvpq]
-        ref_matrix = np.transpose(Pinj[pvpq] - yBus[pvpq.T, :][:, ref] * voltage.imag[ref])
+        theta_ref = np.angle(voltage[ref])
+        ref_matrix = np.transpose(Pinj[pvpq] - yBus[pvpq.T, :][:, ref] * theta_ref)
 
         # The DC init matrix can be singular (e.g. purely radial, line-only feeders whose
         # susceptance-derived Bbus is rank-deficient). In that case spsolve emits a

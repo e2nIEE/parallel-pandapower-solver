@@ -122,6 +122,20 @@ def test_tapped_trafo_stamp_is_asymmetric():
     assert abs(base[0, 1] - base[1, 0]) > 1e-6
 
 
+def test_tapped_trafo_dc_inputs_match_rebuilt_outage():
+    """Outage-specific DC stamps must include the removed trafo's phase-shift injection."""
+    net = FIXTURES["tapped_trafo"]()
+    gen = ContingencyCaseGenerator(net)
+    Bbus, p_shift = gen.dc_inputs_for_case("trafo")
+
+    ref_net = copy.deepcopy(net)
+    ref_net.trafo.drop(index=ref_net.trafo.index[ref_net.trafo.outage_group == "trafo"], inplace=True)
+    ref = NewtonPowerflow(ref_net)
+
+    np.testing.assert_allclose(Bbus.toarray(), ref._Bbus.toarray(), atol=1e-12)
+    np.testing.assert_allclose(p_shift, ref._p_shift, atol=1e-12)
+
+
 @pytest.mark.parametrize("name", list(FIXTURES))
 def test_served_mask_matches_ground_truth_reslack_off(name):
     net = FIXTURES[name]()

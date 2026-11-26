@@ -14,12 +14,17 @@ Requires the compiled ``nr_klu`` with ``solve_batch_contingency`` (build the C++
 extension: ``pip install ./p3s/cpp``).
 """
 
+import copy
+
 import numpy as np
 import pytest
 
+from p3s.contingency.case_generator import ContingencyCaseGenerator
 from p3s.contingency.fixtures import FIXTURES
 from p3s.contingency.ground_truth import ground_truth
-from p3s.contingency.solver_cpp import solve_contingencies_cpp
+from p3s.contingency.solver_cpp import _initial_conditions, solve_contingencies_cpp
+from p3s.NewtonPowerflow import NewtonPowerflow
+from p3s.timeseries import dc_initial_voltage
 
 # Skip the whole module cleanly if the compiled solver (or the new method) is absent.
 nr_klu = pytest.importorskip("p3s.cpp.nr_klu", reason="compiled nr_klu not built")
@@ -62,6 +67,21 @@ def test_cpu_contingency_reslacking_matches_ground_truth():
     _assert_matches_ground_truth(res, gt, reslack=True)
     # with re-slacking the whole island is served
     assert res.served[:, 0].all()
+
+
+def test_cpu_batch_uses_outage_specific_dc_start():
+    net = FIXTURES["tapped_trafo"]()
+    gen = ContingencyCaseGenerator(net)
+    batch = gen.build()
+    V0, _ = _initial_conditions(gen, batch, "dc")
+
+    outaged_net = copy.deepcopy(net)
+    outaged_net.trafo.drop(
+        index=outaged_net.trafo.index[outaged_net.trafo.outage_group == batch.groups[0]],
+        inplace=True,
+    )
+    expected = dc_initial_voltage(NewtonPowerflow(outaged_net))
+    np.testing.assert_allclose(V0[:, 0], expected, atol=1e-12)
 
 
 def test_result_table_shapes_and_dtypes():
