@@ -69,8 +69,8 @@ def _initial_conditions(
     if init not in ("dc", "flat"):
         raise ValueError(f"init must be 'dc' or 'flat', got {init!r}")
 
-    V0 = np.empty((n, L), dtype=np.complex128)
-    pin = np.zeros((n, L), dtype=np.uint8)
+    V0: NDArray = np.empty((n, L), dtype=np.complex128)
+    pin: NDArray = np.zeros((n, L), dtype=np.uint8)
     pf = gen._npf
     flat_start = pf._initial_voltage
     pvpq_all = np.r_[pf.busses["pv"], pf.busses["pq"]]
